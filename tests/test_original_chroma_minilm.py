@@ -124,6 +124,7 @@ class IngestionTests(unittest.TestCase):
         self.dataset = self.directory / "test_subsampled.jsonl"
         self.topic_model = self.directory / "saved-topic-model"
         self.topic_model.write_bytes(b"stand-in model; never unpickled")
+        self.training_requirements = self.directory / "training-freeze.txt"
         self.destination = self.directory / "chroma"
         self.rows = [{"question_id": str(q), "contexts": [
             {"paragraph_text": f"duplicate-{i % 2}", "idx": i,
@@ -262,7 +263,7 @@ class IngestionTests(unittest.TestCase):
         with mock.patch.object(runner, "inspect_inputs", return_value={}), mock.patch.object(runner, "inspect_environment", return_value={}):
             with mock.patch.object(runner, "create_original_store", side_effect=AssertionError("Must not index")) as create:
                 with redirect_stdout(io.StringIO()) as output:
-                    result = runner.main(["--topic-model", str(self.topic_model)])
+                    result = runner.main(["--topic-model", str(self.topic_model), "--training-requirements", str(self.training_requirements)])
                 self.assertEqual(result, 0)
                 self.assertEqual(json.loads(output.getvalue())["status"], "preflight_passed")
                 create.assert_not_called()
@@ -272,7 +273,7 @@ class IngestionTests(unittest.TestCase):
             self.destination.mkdir()
             return types.SimpleNamespace(_collection=types.SimpleNamespace(count=lambda: 5000))
 
-        arguments = ["--topic-model", str(self.topic_model), "--persist-directory", str(self.destination), "--execute"]
+        arguments = ["--topic-model", str(self.topic_model), "--training-requirements", str(self.training_requirements), "--persist-directory", str(self.destination), "--execute"]
         with mock.patch.object(runner, "inspect_inputs", return_value={}), mock.patch.object(runner, "inspect_environment", return_value={}):
             with mock.patch.object(runner, "create_original_store", side_effect=captured_store) as create, redirect_stdout(io.StringIO()):
                 self.assertEqual(runner.main(arguments), 0)
@@ -284,20 +285,135 @@ class IngestionTests(unittest.TestCase):
 
     def test_failed_record_count_does_not_publish_success_manifest(self):
         store = types.SimpleNamespace(_collection=types.SimpleNamespace(count=lambda: 4999))
-        arguments = ["--topic-model", str(self.topic_model), "--persist-directory", str(self.destination), "--execute"]
+        arguments = ["--topic-model", str(self.topic_model), "--training-requirements", str(self.training_requirements), "--persist-directory", str(self.destination), "--execute"]
         with mock.patch.object(runner, "inspect_inputs", return_value={}), mock.patch.object(runner, "inspect_environment", return_value={}):
             with mock.patch.object(runner, "create_original_store", return_value=store), redirect_stderr(io.StringIO()):
                 self.assertEqual(runner.main(arguments), 1)
         self.assertFalse((self.destination / "minilm_ingestion_manifest.json").exists())
 
     def test_environment_mismatch_fails_before_ingestion(self):
-        with mock.patch.object(runner.metadata, "version", return_value="unexpected"):
-            with self.assertRaisesRegex(ValueError, "Dependency mismatch"):
-                runner.inspect_environment()
+        arguments = ["--topic-model", str(self.topic_model), "--training-requirements", str(self.training_requirements), "--execute"]
+        with mock.patch.object(runner, "inspect_inputs", return_value={}), mock.patch.object(runner, "inspect_environment", side_effect=ValueError("Dependency mismatch: torch")):
+            with mock.patch.object(runner, "create_original_store") as create, redirect_stderr(io.StringIO()):
+                self.assertEqual(runner.main(arguments), 1)
+                create.assert_not_called()
+        self.assertFalse(self.destination.exists())
 
     def test_original_sources_are_unchanged(self):
         for relative, expected in runner.SOURCE_SHA256.items():
             self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), expected, relative)
+
+
+class TrainingEnvironmentTests(unittest.TestCase):
+    """Synthetic metadata only; do not install the newer training stack in Cloud."""
+
+    SCIENTIFIC = {
+        "bertopic": "0.16.3", "transformers": "4.45.1",
+        "sentence-transformers": "5.7.0", "torch": "2.14.1", "numpy": "1.26.4",
+        "scikit-learn": "1.9.1", "scipy": "1.17.1", "umap-learn": "0.5.12",
+        "hdbscan": "0.8.44", "numba": "0.68.0", "llvmlite": "0.50.0",
+    }
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.freeze = Path(temporary.name) / "synthetic-training-freeze.txt"
+        # The other 51 names are intentionally fictional test fixtures, not a
+        # fabricated reconstruction of the unavailable real Kaggle freeze.
+        self.training = {**self.SCIENTIFIC, **{f"fixture-package-{i}": "1.0" for i in range(51)}}
+        self.profile = runner.read_exact_pins(runner.PROFILE_PATH)
+        self.installed = {**self.profile, **self.training}
+        self.write_freeze()
+        patches = [
+            mock.patch.object(runner.platform, "python_version", return_value="3.12.3"),
+            mock.patch.object(runner.metadata, "version", side_effect=self.installed_version),
+            mock.patch.object(runner.subprocess, "run", return_value=types.SimpleNamespace(returncode=0, stdout="No broken requirements found.", stderr="")),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def installed_version(self, name):
+        if name not in self.installed:
+            raise runner.metadata.PackageNotFoundError(name)
+        return self.installed[name]
+
+    def write_freeze(self):
+        self.freeze.write_text("".join(f"{name}=={version}\n" for name, version in self.training.items()))
+
+    def test_profile_preserves_all_eleven_supplied_scientific_versions(self):
+        self.assertEqual(set(runner.SCIENTIFIC_PACKAGES), set(self.SCIENTIFIC))
+        self.assertEqual({name: self.profile[name] for name in self.SCIENTIFIC}, self.SCIENTIFIC)
+        self.assertNotIn("huggingface-hub", self.profile)
+        self.assertNotIn("pandas", self.profile)
+
+    def test_matching_complete_freeze_records_provenance(self):
+        result = runner.inspect_environment(self.freeze)
+        self.assertEqual(result["python"], "3.12.3")
+        self.assertEqual(result["verified_training_packages"], 62)
+        self.assertEqual(result["training_requirements_sha256"], runner.file_sha256(self.freeze))
+        self.assertEqual(result["packages"]["sentence-transformers"], "5.7.0")
+        self.assertEqual(result["packages"]["torch"], "2.14.1")
+
+    def test_each_scientific_version_mismatch_is_rejected(self):
+        for name in self.SCIENTIFIC:
+            with self.subTest(package=name):
+                self.installed[name] = "0.0"
+                with self.assertRaisesRegex(ValueError, f"Dependency mismatch: {name}"):
+                    runner.inspect_environment(self.freeze)
+                self.installed[name] = self.SCIENTIFIC[name]
+
+    def test_python_patch_and_minor_mismatches_are_rejected(self):
+        for version in ("3.12.14", "3.13.0"):
+            with self.subTest(python=version), mock.patch.object(runner.platform, "python_version", return_value=version):
+                with self.assertRaisesRegex(ValueError, "Python mismatch"):
+                    runner.inspect_environment(self.freeze)
+
+    def test_preflight_also_checks_the_other_backed_up_packages(self):
+        self.installed["fixture-package-50"] = "2.0"
+        with self.assertRaisesRegex(ValueError, "Dependency mismatch: fixture-package-50"):
+            runner.inspect_environment(self.freeze)
+
+    def test_missing_package_is_rejected(self):
+        del self.installed["torch"]
+        with self.assertRaisesRegex(ValueError, "Missing dependency: torch"):
+            runner.inspect_environment(self.freeze)
+
+    def test_installed_transitive_conflicts_are_rejected(self):
+        failed = types.SimpleNamespace(returncode=1, stdout="fixture dependency needs another version", stderr="")
+        with mock.patch.object(runner.subprocess, "run", return_value=failed):
+            with self.assertRaisesRegex(ValueError, "Installed dependency conflict"):
+                runner.inspect_environment(self.freeze)
+
+    def test_partial_training_freeze_is_rejected(self):
+        self.training = self.SCIENTIFIC.copy()
+        self.write_freeze()
+        with self.assertRaisesRegex(ValueError, "complete 62-package training freeze"):
+            runner.inspect_environment(self.freeze)
+
+    def test_profile_conflict_is_reported_without_changing_training_versions(self):
+        self.training["sentence-transformers"] = "3.1.1"
+        self.write_freeze()
+        before = self.freeze.read_bytes()
+        with self.assertRaisesRegex(ValueError, "Training/profile conflict: sentence-transformers"):
+            runner.inspect_environment(self.freeze)
+        self.assertEqual(self.freeze.read_bytes(), before)
+
+    def test_cuda_local_build_is_preserved_when_recorded(self):
+        self.training["torch"] = "2.14.1+cu130"
+        self.installed["torch"] = "2.14.1+cu130"
+        self.write_freeze()
+        self.assertEqual(runner.inspect_environment(self.freeze)["packages"]["torch"], "2.14.1+cu130")
+        self.installed["torch"] = "2.14.1+cpu"
+        with self.assertRaisesRegex(ValueError, "Dependency mismatch: torch"):
+            runner.inspect_environment(self.freeze)
+
+    def test_ambiguous_requirement_syntax_is_not_silently_ignored(self):
+        for content in ("torch>=2.14\n", "torch @ https://example.invalid/torch.whl\n", "numpy==1.*\n", "foo_bar==1.0\nfoo-bar==1.0\n"):
+            with self.subTest(content=content):
+                self.freeze.write_text(content)
+                with self.assertRaises(ValueError):
+                    runner.read_exact_pins(self.freeze)
 
 
 if __name__ == "__main__":
