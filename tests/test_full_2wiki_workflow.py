@@ -262,6 +262,119 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "provenance"):
             w.assign_topics(self.root, self.environment, loader=TopicModel.load)
 
+    def split_profiles(self):
+        producer = {**self.environment, "profile": "training", "python": "3.12.3",
+                    "recorded_training_packages": {**self.environment["packages"], "packaging": "26.3"},
+                    "training_requirements_sha256": "fixture-original-freeze",
+                    "packages": {**self.environment["packages"], "packaging": "26.3"}}
+        consumer = {**producer, "profile": "retrieval", "packages": {
+            **producer["packages"], "packaging": "24.2", "langchain": "0.3.2"}}
+        self.environment = producer
+        return producer, consumer
+
+    def test_cross_environment_model_requires_reference_and_successful_transform_check(self):
+        producer, consumer = self.split_profiles()
+        self.topics()
+        info = w.prepared(self.root)
+        with self.assertRaisesRegex(ValueError, "verify-model"):
+            w.topic_manifest(self.root, info, consumer)
+        with self.assertRaisesRegex(ValueError, "original training environment"):
+            w.verify_model(self.root, consumer, loader=TopicModel.load)
+        w.verify_model(self.root, producer, loader=TopicModel.load)
+        with self.assertRaisesRegex(ValueError, "verify-model"):
+            w.topic_manifest(self.root, info, consumer)
+        w.verify_model(self.root, consumer, loader=TopicModel.load)
+        self.assertEqual(w.topic_manifest(self.root, info, consumer)["configuration"]["environment"], producer)
+        w.build_cache(self.root, consumer, embedder=Encoder())
+        store = Store()
+        self.assertTrue(w.ingest(self.root, consumer, factory=store.factory, minimum_free_bytes=0)["complete"])
+        self.assertEqual(store.count(), 7)
+
+    def test_model_transfer_refuses_scientific_version_or_certificate_changes(self):
+        producer, consumer = self.split_profiles()
+        self.topics()
+        w.verify_model(self.root, producer, loader=TopicModel.load)
+        incompatible = {**consumer, "packages": {**consumer["packages"], "torch": "other"}}
+        loader = mock.Mock()
+        with self.assertRaisesRegex(ValueError, "dependencies differ"):
+            w.verify_model(self.root, incompatible, loader=loader)
+        loader.assert_not_called()
+        w.verify_model(self.root, consumer, loader=TopicModel.load)
+        changed = {**consumer, "extra_environment_change": True}
+        with self.assertRaisesRegex(ValueError, "verify-model"):
+            w.topic_manifest(self.root, w.prepared(self.root), changed)
+
+    def test_model_transfer_rejects_changed_topic_labels_or_probabilities(self):
+        producer, consumer = self.split_profiles()
+        self.topics()
+        w.verify_model(self.root, producer, loader=TopicModel.load)
+
+        class WrongLabels(TopicModel):
+            def transform(self, documents):
+                return [418] * len(documents), None
+
+        with self.assertRaisesRegex(ValueError, "topic labels differ"):
+            w.verify_model(self.root, consumer, loader=lambda _: WrongLabels())
+        with self.assertRaisesRegex(ValueError, "verify-model"):
+            w.topic_manifest(self.root, w.prepared(self.root), consumer)
+        w.compare_probes([{"topics": [1], "probabilities": [.5]}], [{"topics": [1], "probabilities": [.5000001]}])
+        with self.assertRaisesRegex(ValueError, "probabilities differ"):
+            w.compare_probes([{"topics": [1], "probabilities": [.5]}], [{"topics": [1], "probabilities": [.6]}])
+
+    def test_probe_never_uses_heldout_answers_or_changes_global_assignments(self):
+        producer, _ = self.split_profiles()
+        self.topics()
+        before = w.digest(self.root / "topics.npy")
+        w.verify_model(self.root, producer, loader=TopicModel.load)
+        reference = w.read(self.root / "model_probe_reference.json")
+        self.assertEqual([len(case) for case in reference["cases"]], [1, 1, 1, 1, 3])
+        self.assertNotIn("unused", json.dumps(reference))
+        self.assertEqual(w.digest(self.root / "topics.npy"), before)
+        self.assertEqual([len(d) for d in TopicModel.transforms[:1]], [7])
+
+    def test_approved_previous_preparation_is_reused_but_unknown_code_is_refused(self):
+        result = self.prepare()
+        previous = next(iter(w.PREPARATION_IMPLEMENTATIONS))
+        with w.database(self.root / "corpus.sqlite", write=True) as db:
+            job = w.state(db)
+            job["configuration"]["implementation_sha256"] = previous
+            w.save_state(db, job)
+            db.commit()
+        result["configuration"]["implementation_sha256"] = previous
+        result["corpus_sha256"] = w.digest(self.root / "corpus.sqlite")
+        w.atomic(self.root / "preparation.json", result)
+        self.assertEqual(self.prepare(), result)
+        self.assertEqual(w.digest(self.root / "corpus.sqlite"), result["corpus_sha256"])
+        result["configuration"]["implementation_sha256"] = "unapproved"
+        w.atomic(self.root / "preparation.json", result)
+        with self.assertRaisesRegex(ValueError, "another protocol"):
+            w.prepared(self.root)
+
+    def test_cli_selects_training_profile_for_fit_and_assign_without_retrieval_checker(self):
+        for stage in ("train-topics", "assign-topics"):
+            target = "train_topics" if stage == "train-topics" else "assign_topics"
+            with mock.patch.object(w, "runtime", return_value=self.environment) as runtime:
+                with mock.patch.object(w, target, return_value={}), mock.patch("builtins.print"):
+                    code = w.main([stage, "--workdir", str(self.root), "--training-requirements", "original-62.txt"])
+            self.assertEqual(code, 0)
+            self.assertEqual(runtime.call_args.args[1], "training")
+
+    def test_training_runtime_uses_new_profile_checker_and_never_combined_checker(self):
+        old = w.module("_source_guards", ROOT / "scripts/ingest_original_2wiki_minilm.py")
+        old.inspect_environment = mock.Mock(side_effect=AssertionError("Combined checker must not run"))
+        checker = mock.Mock()
+        checker.inspect_environment.return_value = {"profile": "training", "packages": {"packaging": "26.3"}}
+        with mock.patch.object(w, "module", return_value=old), mock.patch.object(w, "environments", return_value=checker):
+            result = w.runtime("original-62.txt", "training")
+        checker.inspect_environment.assert_called_once_with("original-62.txt", "training")
+        old.inspect_environment.assert_not_called()
+        self.assertEqual(result["profile"], "training")
+
+    def test_fit_and_assign_explicitly_refuse_retrieval_profile(self):
+        for method in (w.train_topics, w.assign_topics):
+            with self.assertRaisesRegex(ValueError, "training-only"):
+                method(self.root, {"profile": "retrieval"})
+
     def test_memory_guard_runs_before_model_creation(self):
         self.prepare()
         factory = mock.Mock()

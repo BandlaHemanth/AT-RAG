@@ -25,6 +25,9 @@ RECIPE = {"constructor": {"min_topic_size": 50}, "reduction_target": 20,
           "fit_uses_all_occurrences": True, "fit_uses_precomputed_embeddings": False,
           "seed_or_component_overrides": None}
 BATCH = 1000
+# Audited PR #5 commit b042922: preparation schema/parsing/count rules unchanged.
+# Retain its provenance and immutable DB hash rather than redo 1.67M occurrences.
+PREPARATION_IMPLEMENTATIONS = {"3dcb7d5352646e0af5040ae21dd1e9bff0cc3948be95fbad9cea1843b1c46aa8"}
 
 
 def encoded(value):
@@ -111,18 +114,28 @@ def adapter():
     return module("_full_minilm", ROOT / "compat/minilm/utils.py")
 
 
-def runtime(freeze):
+def environments():
+    return module("_full_profiles", ROOT / "scripts/full_2wiki_environment.py")
+
+
+def runtime(freeze, profile="retrieval"):
     compatibility = module("_full_environment", ROOT / "scripts/ingest_original_2wiki_minilm.py")
     for relative, expected in compatibility.SOURCE_SHA256.items():
         if digest(ROOT / relative) != expected:
             raise ValueError(f"Original source changed: {relative}")
-    result = compatibility.inspect_environment(freeze)
-    result.pop("training_requirements")  # Mount paths may change between Kaggle sessions.
+    result = environments().inspect_environment(freeze, profile)
     result["implementation_sha256"] = digest(__file__)
     result["adapter_sha256"] = digest(ROOT / "compat/minilm/utils.py")
     result["thread_environment"] = {key: os.environ.get(key) for key in (
         "PYTHONHASHSEED", "NUMBA_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")}
     return result
+
+
+def compatible_preparation(left, right):
+    accepted = PREPARATION_IMPLEMENTATIONS | {digest(__file__)}
+    return (left.get("implementation_sha256") in accepted and right.get("implementation_sha256") in accepted and
+            {k: v for k, v in left.items() if k != "implementation_sha256"} ==
+            {k: v for k, v in right.items() if k != "implementation_sha256"})
 
 
 def occurrence_id(source_sha, number):
@@ -140,7 +153,7 @@ def prepare(source, heldout, root, expected=COUNTS, checkpoint=BATCH, progress=N
     manifest_path = root / "preparation.json"
     if manifest_path.exists():
         result = prepared(root)
-        if result["configuration"] != config:
+        if not compatible_preparation(result["configuration"], config):
             raise ValueError("Training/held-out source or preparation configuration changed")
         return result
     with database(root / "corpus.sqlite", write=True) as db:
@@ -154,8 +167,10 @@ def prepare(source, heldout, root, expected=COUNTS, checkpoint=BATCH, progress=N
             CREATE TABLE IF NOT EXISTS occurrences(number INTEGER PRIMARY KEY,text_id TEXT NOT NULL,metadata TEXT NOT NULL);
         """)
         job = state(db)
-        if job and job["configuration"] != config:
+        if job and not compatible_preparation(job["configuration"], config):
             raise ValueError("Refusing resume against different source bytes/configuration")
+        if job:
+            config = job["configuration"]  # Preserve the approved producer's provenance.
         if not job:
             job = {"configuration": config, "offset": 0, "questions": 0, "occurrences": 0,
                    "unique_texts": 0, "empty_texts": 0, "text_bytes": 0, "complete": False}
@@ -226,7 +241,7 @@ def prepare(source, heldout, root, expected=COUNTS, checkpoint=BATCH, progress=N
 def prepared(root):
     result = read(root / "preparation.json")
     if (result.get("status") != "complete" or result["configuration"]["protocol"] != PROTOCOL or
-            result["configuration"]["implementation_sha256"] != digest(__file__)):
+            result["configuration"]["implementation_sha256"] not in PREPARATION_IMPLEMENTATIONS | {digest(__file__)}):
         raise ValueError("Preparation is incomplete or belongs to another protocol")
     if digest(root / "corpus.sqlite") != result["corpus_sha256"]:
         raise ValueError("Prepared corpus changed")
@@ -288,18 +303,110 @@ def resolved_parameters(model):
             for name in ("umap_model", "hdbscan_model", "vectorizer_model") if hasattr(model, name)}
 
 
-def topic_manifest(root, info, environment):
+def topic_manifest(root, info, environment, allow_unverified=False):
     manifest = read(root / "topics.json")
+    producer = manifest.get("configuration", {}).get("environment")
     expected = {"protocol": PROTOCOL, "corpus_sha256": info["corpus_sha256"],
-                "recipe": RECIPE, "environment": environment}
+                "recipe": RECIPE, "environment": producer}
     if manifest.get("status") != "complete" or manifest.get("configuration") != expected:
         raise ValueError("Topic model provenance is incompatible; the old custom 418-topic model is not accepted")
     if digest(root / "bertopic_model") != manifest["model_sha256"]:
         raise ValueError("Saved full-training topic model changed")
+    if producer != environment:
+        try:
+            matching = environments().model_contract(producer) == environments().model_contract(environment)
+        except (KeyError, TypeError):
+            matching = False
+        if not matching:
+            raise ValueError("Topic model provenance: Python, recorded freeze, or retained model dependencies differ")
+        if not allow_unverified:
+            certificate = root / "model_compatibility.json"
+            reference = root / "model_probe_reference.json"
+            expected_certificate = {"status": "verified", "model_sha256": manifest["model_sha256"],
+                                    "source_environment_sha256": identity(producer),
+                                    "target_environment_sha256": identity(environment),
+                                    "reference_sha256": digest(reference) if reference.exists() else None}
+            if not certificate.exists() or read(certificate) != expected_certificate:
+                raise ValueError("Run verify-model in this environment before loading/ingesting the training model")
     return manifest
 
 
+def probe_outputs(model, cases):
+    import numpy as np
+    result = []
+    for texts in cases:
+        topics, probabilities = model.transform(texts)
+        labels = np.asarray(topics)
+        if labels.shape != (len(texts),) or labels.dtype.kind not in "iu":
+            raise ValueError("Invalid topic labels during model compatibility verification")
+        probabilities = None if probabilities is None else np.asarray(probabilities, dtype="float64")
+        if probabilities is not None and not np.isfinite(probabilities).all():
+            raise ValueError("Nonfinite model probe probabilities")
+        result.append({"topics": labels.tolist(), "probabilities": None if probabilities is None else probabilities.tolist()})
+    return result
+
+
+def compare_probes(expected, actual):
+    import numpy as np
+    if len(expected) != len(actual):
+        raise ValueError("Model compatibility probe count differs")
+    for reference, candidate in zip(expected, actual):
+        if reference["topics"] != candidate["topics"]:
+            raise ValueError("Model compatibility probe topic labels differ")
+        left, right = reference["probabilities"], candidate["probabilities"]
+        if (left is None) != (right is None):
+            raise ValueError("Model compatibility probe probability availability differs")
+        if left is not None:
+            left, right = np.asarray(left), np.asarray(right)
+            if left.shape != right.shape or not np.allclose(left, right, atol=1e-6, rtol=1e-6):
+                raise ValueError("Model compatibility probe probabilities differ (atol=rtol=1e-6)")
+
+
+def verify_model(root, environment, loader=None):
+    """Explicit Kaggle check, separate from the original global topic transform.
+
+    Source environment writes reference outputs from a freshly loaded pickle.
+    A destination must reproduce them before its model transfer is certified.
+    Only training paragraph text and a fixed neutral query are used, never gold.
+    """
+    info = prepared(root)
+    manifest = topic_manifest(root, info, environment, allow_unverified=True)
+    producer = manifest["configuration"]["environment"]
+    reference_path = root / "model_probe_reference.json"
+    if not reference_path.exists() and producer != environment:
+        raise ValueError("First run verify-model in the original training environment to create the reference")
+    if reference_path.exists():
+        reference = read(reference_path)
+        if (reference["model_sha256"] != manifest["model_sha256"] or
+                reference["corpus_sha256"] != info["corpus_sha256"] or
+                reference["source_environment_sha256"] != identity(producer)):
+            raise ValueError("Model probe reference provenance changed")
+        cases = reference["cases"]
+    else:
+        with database(root / "corpus.sqlite") as db:
+            texts = [r[0] for r in db.execute("SELECT text FROM texts ORDER BY number LIMIT 3")]
+        cases = [[text] for text in texts] + [["Which person or place is described in the passage?"], texts]
+        reference = {"model_sha256": manifest["model_sha256"], "corpus_sha256": info["corpus_sha256"],
+                     "source_environment_sha256": identity(producer), "cases": cases}
+    loaded = (loader or model_class().load)(str(root / "bertopic_model"))
+    outputs = probe_outputs(loaded, cases)
+    if digest(root / "bertopic_model") != manifest["model_sha256"]:
+        raise ValueError("Model file changed during verification")
+    if reference_path.exists():
+        compare_probes(reference["outputs"], outputs)
+    else:
+        reference["outputs"] = outputs
+        atomic(reference_path, reference)
+    certificate = {"status": "verified", "model_sha256": manifest["model_sha256"],
+                   "source_environment_sha256": identity(producer),
+                   "target_environment_sha256": identity(environment), "reference_sha256": digest(reference_path)}
+    atomic(root / "model_compatibility.json", certificate)
+    return certificate
+
+
 def train_topics(root, environment, minimum_gib=24, factory=None, loader=None):
+    if environment.get("profile", "training") != "training":
+        raise ValueError("train-topics requires the training-only environment")
     info = prepared(root)
     configuration = {"protocol": PROTOCOL, "corpus_sha256": info["corpus_sha256"],
                      "recipe": RECIPE, "environment": environment}
@@ -339,6 +446,8 @@ def assignment_manifest(root, info, model):
 
 
 def assign_topics(root, environment, minimum_gib=24, loader=None):
+    if environment.get("profile", "training") != "training":
+        raise ValueError("assign-topics requires the training-only environment")
     import numpy as np
     info = prepared(root)
     model = topic_manifest(root, info, environment)
@@ -620,12 +729,14 @@ def verify_completed(root, environment, factory=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=["prepare", "cache", "train-topics", "assign-topics", "ingest", "verify", "status"])
+    parser.add_argument("stage", choices=["prepare", "preflight", "verify-model", "cache", "train-topics", "assign-topics", "ingest", "verify", "status"])
     parser.add_argument("--workdir", type=Path, required=True)
     parser.add_argument("--input", type=Path, help="Complete processed train.jsonl (prepare only)")
     parser.add_argument("--heldout", type=Path, help="Held-out dev/test JSONL; only question IDs are inspected")
-    parser.add_argument("--training-requirements", type=Path, help="Frozen Python 3.12.3 training environment, as in merged MiniLM guide")
+    parser.add_argument("--training-requirements", type=Path, help="Original immutable 62-package training freeze (Python 3.12.3)")
     parser.add_argument("--reuse-embeddings", type=Path, help="Optional complete legacy embedding directory (cache only)")
+    parser.add_argument("--environment-profile", choices=["training", "retrieval"],
+                        help="preflight/verify-model: default training; other stages select and enforce their profile")
     args = parser.parse_args(argv)
     root = args.workdir.resolve()
     try:
@@ -637,12 +748,21 @@ def main(argv=None):
                                  progress=lambda state: print(f"Prepared {state['occurrences']} occurrences", flush=True))
             elif args.stage == "status":
                 result = {name: read(root / name) for name in (
-                    "preparation.json", "cache.json", "fit.json", "topics.json", "assignments.json", "ingestion.json") if (root / name).exists()}
+                    "preparation.json", "cache.json", "fit.json", "topics.json", "assignments.json", "model_compatibility.json", "ingestion.json") if (root / name).exists()}
             else:
                 if not args.training_requirements:
                     raise ValueError("This stage requires --training-requirements")
-                environment = runtime(args.training_requirements)
-                if args.stage == "cache":
+                required_profile = ("training" if args.stage in {"train-topics", "assign-topics"} else "retrieval")
+                if args.stage in {"preflight", "verify-model"}:
+                    required_profile = args.environment_profile or "training"
+                elif args.environment_profile and args.environment_profile != required_profile:
+                    raise ValueError(f"{args.stage} requires the {required_profile} profile")
+                environment = runtime(args.training_requirements, required_profile)
+                if args.stage == "preflight":
+                    result = environment
+                elif args.stage == "verify-model":
+                    result = verify_model(root, environment)
+                elif args.stage == "cache":
                     result = build_cache(root, environment, reuse=args.reuse_embeddings,
                                          progress=lambda state: print(f"Cached {state['next']} unique texts", flush=True))
                 elif args.stage == "train-topics":
