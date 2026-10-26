@@ -1,0 +1,14 @@
+# Ingestion compatibility profile; original requirements.txt stays untouched.
+# Restore/check the saved BERTopic model's environment before installing.
+bertopic==0.16.3
+transformers==4.45.1
+sentence-transformers==3.1.1
+numpy==1.26.4
+langchain==0.3.2
+langchain-community==0.3.1
+chromadb==0.5.11
+python-decouple==3.8
+openai==1.51.2
+httpx==0.27.2
+posthog==3.7.0
+huggingface-hub==0.36.2
