@@ -31,6 +31,8 @@ BATCH = 1000
 PREPARATION_IMPLEMENTATIONS = {"3dcb7d5352646e0af5040ae21dd1e9bff0cc3948be95fbad9cea1843b1c46aa8"}
 # Audited f570f7e preparation uses the same schema, parsing, and count checks.
 PREPARATION_IMPLEMENTATIONS.add("970cbc634ef98d4ebd7961e08cc47d689e908c12f887e8d524a251a10b2617f1")
+# Memory-preflight-only update: retain preparations produced by 12e6115 too.
+PREPARATION_IMPLEMENTATIONS.add("1ed5e056c4cbf49fb69c07821093c70823ff296a07b05ebea4cdb4d9104e4deb")
 TRAINING_MODES = ("occurrences", "unique-paragraphs")
 ASSIGNMENT_METHOD = "single-full-occurrence-transform-v1"
 
@@ -328,14 +330,69 @@ def topic_preflight(root, info, training_mode, minimum_gib=24, stage="train-topi
 
 
 def memory_guard(minimum_gib):
-    available = None
-    for line in Path("/proc/meminfo").read_text().splitlines():
-        if line.startswith("MemAvailable:"):
-            available = int(line.split()[1]) * 1024
-    limit, usage = Path("/sys/fs/cgroup/memory.max"), Path("/sys/fs/cgroup/memory.current")
-    if limit.exists() and limit.read_text().strip() != "max":
-        available = min(available or math.inf, max(0, int(limit.read_text()) - int(usage.read_text())))
-    if available is None or available < minimum_gib * 1024 ** 3:
+    """Count only verified inactive-file cache, less a fixed 2 GiB reserve.
+
+    Missing/invalid cache statistics get no reclaim credit. Host availability
+    and a known cgroup-v2 limit are required; explicit 'max' uses host-only RAM.
+    This instantaneous estimate cannot guarantee a subsequent allocation fits.
+    """
+    margin = 2 * 1024 ** 3
+    details = {"stage": "memory-preflight", "minimum_available_memory_gib": minimum_gib,
+               "host_memavailable_bytes": None, "container_limit_bytes": None,
+               "memory_current_bytes": None, "raw_unused_bytes": None,
+               "inactive_file_bytes": None, "estimated_reclaimable_bytes": 0,
+               "safety_margin_bytes": margin, "effective_available_bytes": None}
+
+    def unsigned(value):
+        if not value or not value.isascii() or not value.isdecimal():
+            raise ValueError("Memory counters must be nonnegative decimal integers")
+        return int(value)
+
+    failure = None
+    try:
+        host_rows = [line.split() for line in Path("/proc/meminfo").read_text().splitlines()
+                     if line.startswith("MemAvailable:")]
+        if len(host_rows) != 1 or len(host_rows[0]) != 3 or host_rows[0][2] != "kB":
+            raise ValueError("Missing or malformed host MemAvailable in kB")
+        host = unsigned(host_rows[0][1]) * 1024
+        details["host_memavailable_bytes"] = host
+        raw_limit = Path("/sys/fs/cgroup/memory.max").read_text().strip()
+        if raw_limit == "max":
+            # MemAvailable already estimates host reclaim; never add cache again.
+            details["reclaim_estimate_status"] = "unlimited-host-only"
+            available = host
+        else:
+            limit = unsigned(raw_limit)
+            details["container_limit_bytes"] = limit
+            current = unsigned(Path("/sys/fs/cgroup/memory.current").read_text().strip())
+            details["memory_current_bytes"] = current
+            details["raw_unused_bytes"] = max(0, limit - current)
+            reclaimable = 0
+            try:
+                cache_rows = [line.split() for line in Path("/sys/fs/cgroup/memory.stat").read_text().splitlines()
+                              if line.split() and line.split()[0] == "inactive_file"]
+                if len(cache_rows) != 1 or len(cache_rows[0]) != 2:
+                    raise ValueError("Missing or malformed inactive_file statistic")
+                inactive = unsigned(cache_rows[0][1])
+                details["inactive_file_bytes"] = inactive
+                if inactive > current:
+                    raise ValueError("inactive_file exceeds memory.current; inconsistent snapshot")
+                reclaimable = max(0, inactive - margin)
+                details["reclaim_estimate_status"] = "inactive-file-less-reserve"
+            except (OSError, ValueError) as error:
+                details["reclaim_estimate_status"] = "unavailable-no-credit"
+                details["reclaim_estimate_reason"] = str(error)
+            details["estimated_reclaimable_bytes"] = reclaimable
+            # Subtract any over-limit usage before crediting reclaimable cache.
+            available = min(host, limit, max(0, limit - current + reclaimable))
+        details["effective_available_bytes"] = available
+    except (OSError, ValueError) as error:
+        failure = error
+        details["error"] = str(error)
+    print(json.dumps(details, sort_keys=True), flush=True)
+    if failure is not None:
+        raise ValueError(f"Cannot establish safe available memory: {failure}") from failure
+    if available < minimum_gib * 1024 ** 3:
         raise ValueError(f"Stage requires at least {minimum_gib} GiB available. No model-setting or index-setting fallback is performed")
     return available
 

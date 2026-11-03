@@ -1,6 +1,6 @@
 """Small stand-ins only: no model weights, BERTopic execution, or Chroma DB."""
 
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import importlib.util
 import io
@@ -790,6 +790,151 @@ class WorkflowTests(unittest.TestCase):
         original = w.module("_original_guard_test", ROOT / "scripts/ingest_original_2wiki_minilm.py")
         for relative, expected in original.SOURCE_SHA256.items():
             self.assertEqual(w.digest(ROOT / relative), expected, relative)
+
+
+class MemoryGuardTests(unittest.TestCase):
+    """Synthetic /proc and cgroup-v2 counters; no real resource assumptions."""
+
+    GIB = 1024 ** 3
+
+    def snapshot(self, host_gib=30, limit_gib=30, unused_gib=16, inactive_gib=12):
+        return {"/proc/meminfo": f"MemAvailable: {int(host_gib * self.GIB) // 1024} kB\n",
+                "/sys/fs/cgroup/memory.max": str(int(limit_gib * self.GIB)),
+                "/sys/fs/cgroup/memory.current": str(int((limit_gib - unused_gib) * self.GIB)),
+                "/sys/fs/cgroup/memory.stat": f"inactive_file {int(inactive_gib * self.GIB)}\n"}
+
+    def measure(self, files, minimum_gib=24):
+        def read_text(path, *args, **kwargs):
+            if str(path) not in files:
+                raise FileNotFoundError(str(path))
+            return files[str(path)]
+
+        output = io.StringIO()
+        with mock.patch.object(Path, "read_text", autospec=True, side_effect=read_text), redirect_stdout(output):
+            try:
+                return w.memory_guard(minimum_gib)
+            finally:
+                self.details = json.loads(output.getvalue())
+
+    def test_reported_kaggle_resources_pass_with_two_gib_reserve_and_complete_diagnostics(self):
+        files = self.snapshot(host_gib=29.69, unused_gib=15.98, inactive_gib=12.19)
+        available = self.measure(files)
+        self.assertAlmostEqual(available / self.GIB, 26.17, places=6)
+        details = self.details
+        self.assertEqual(details["minimum_available_memory_gib"], 24)
+        self.assertAlmostEqual(details["raw_unused_bytes"] / self.GIB, 15.98, places=6)
+        self.assertAlmostEqual(details["inactive_file_bytes"] / self.GIB, 12.19, places=6)
+        self.assertAlmostEqual(details["estimated_reclaimable_bytes"] / self.GIB, 10.19, places=6)
+        self.assertEqual(details["safety_margin_bytes"], 2 * self.GIB)
+        self.assertEqual(details["effective_available_bytes"], available)
+        self.assertEqual(details["container_limit_bytes"], 30 * self.GIB)
+        self.assertEqual(details["reclaim_estimate_status"], "inactive-file-less-reserve")
+
+    def test_other_file_active_anon_and_slab_memory_get_no_reclaim_credit(self):
+        files = self.snapshot(unused_gib=16, inactive_gib=0)
+        files["/sys/fs/cgroup/memory.stat"] += "file 14000000000\nactive_file 14000000000\nanon 1000000000\nslab_reclaimable 1000000000\n"
+        with self.assertRaisesRegex(ValueError, "at least 24 GiB"):
+            self.measure(files)
+        self.assertEqual(self.details["estimated_reclaimable_bytes"], 0)
+        self.assertEqual(self.details["effective_available_bytes"], 16 * self.GIB)
+
+    def test_cache_below_reserve_cannot_reduce_unused_or_give_negative_credit(self):
+        for inactive in (0, 1, 2):
+            with self.subTest(inactive=inactive):
+                self.assertEqual(self.measure(self.snapshot(unused_gib=25, inactive_gib=inactive)), 25 * self.GIB)
+                self.assertEqual(self.details["estimated_reclaimable_bytes"], 0)
+
+    def test_exact_24_gib_boundary_passes_but_one_byte_less_fails(self):
+        files = self.snapshot(unused_gib=14, inactive_gib=12)
+        self.assertEqual(self.measure(files), 24 * self.GIB)
+        files["/sys/fs/cgroup/memory.current"] = str(16 * self.GIB + 1)
+        with self.assertRaisesRegex(ValueError, "at least 24 GiB"):
+            self.measure(files)
+        self.assertEqual(self.details["effective_available_bytes"], 24 * self.GIB - 1)
+
+    def test_estimate_is_capped_by_host_available_and_container_limit(self):
+        self.assertEqual(self.measure(self.snapshot(host_gib=25, unused_gib=16, inactive_gib=14)), 25 * self.GIB)
+        with self.assertRaisesRegex(ValueError, "at least 24 GiB"):
+            self.measure(self.snapshot(host_gib=100, limit_gib=23, unused_gib=23, inactive_gib=0))
+        self.assertEqual(self.details["effective_available_bytes"], 23 * self.GIB)
+
+    def test_zero_host_available_is_never_replaced_with_container_headroom(self):
+        with self.assertRaisesRegex(ValueError, "at least 24 GiB"):
+            self.measure(self.snapshot(host_gib=0))
+        self.assertEqual(self.details["effective_available_bytes"], 0)
+
+    def test_missing_or_malformed_host_available_fails_closed(self):
+        for content in (None, "MemFree: 999999999 kB\n", "MemAvailable: -1 kB\n",
+                        "MemAvailable: nan kB\n", "MemAvailable: 999999999 MB\n",
+                        "MemAvailable: 999999999\n", "MemAvailable: 1 kB\nMemAvailable: 2 kB\n"):
+            with self.subTest(content=content):
+                files = self.snapshot()
+                if content is None:
+                    del files["/proc/meminfo"]
+                else:
+                    files["/proc/meminfo"] = content
+                with self.assertRaisesRegex(ValueError, "Cannot establish safe available memory"):
+                    self.measure(files)
+                self.assertIsNone(self.details["effective_available_bytes"])
+
+    def test_missing_or_malformed_limit_or_current_never_uses_host_as_fallback(self):
+        for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"):
+            for content in (None, "", "-1", "NaN", "inf", "3.0", "1_000", "１２３", "MAX"):
+                with self.subTest(path=path, content=content):
+                    files = self.snapshot(unused_gib=26, inactive_gib=0)
+                    if content is None:
+                        del files[path]
+                    else:
+                        files[path] = content
+                    with self.assertRaisesRegex(ValueError, "Cannot establish safe available memory"):
+                        self.measure(files)
+                    self.assertIsNone(self.details["effective_available_bytes"])
+
+    def test_missing_malformed_or_inconsistent_cache_gets_zero_credit(self):
+        invalid = (None, "", "file 99999999999\n", "inactive_file\n", "inactive_file -1\n",
+                   "inactive_file nan\n", "inactive_file 1 2\n", "inactive_file 1\ninactive_file 2\n",
+                   f"inactive_file {15 * self.GIB}\n")  # current is only 14 GiB
+        for content in invalid:
+            with self.subTest(content=content):
+                files = self.snapshot()
+                if content is None:
+                    del files["/sys/fs/cgroup/memory.stat"]
+                else:
+                    files["/sys/fs/cgroup/memory.stat"] = content
+                with self.assertRaisesRegex(ValueError, "at least 24 GiB"):
+                    self.measure(files)
+                self.assertEqual(self.details["estimated_reclaimable_bytes"], 0)
+                self.assertEqual(self.details["effective_available_bytes"], 16 * self.GIB)
+                self.assertEqual(self.details["reclaim_estimate_status"], "unavailable-no-credit")
+
+    def test_missing_cache_can_pass_only_when_verified_unused_memory_alone_is_sufficient(self):
+        files = self.snapshot(unused_gib=25, inactive_gib=0)
+        del files["/sys/fs/cgroup/memory.stat"]
+        self.assertEqual(self.measure(files), 25 * self.GIB)
+        self.assertIsNone(self.details["inactive_file_bytes"])
+        self.assertEqual(self.details["estimated_reclaimable_bytes"], 0)
+
+    def test_over_limit_usage_is_subtracted_before_reclaim_credit(self):
+        files = self.snapshot(unused_gib=-2, inactive_gib=6)
+        with self.assertRaisesRegex(ValueError, "at least 24 GiB"):
+            self.measure(files)
+        self.assertEqual(self.details["raw_unused_bytes"], 0)
+        self.assertEqual(self.details["estimated_reclaimable_bytes"], 4 * self.GIB)
+        self.assertEqual(self.details["effective_available_bytes"], 2 * self.GIB)
+
+    def test_explicit_unlimited_container_uses_host_once_without_adding_cache(self):
+        files = self.snapshot(host_gib=25)
+        files["/sys/fs/cgroup/memory.max"] = "max\n"
+        del files["/sys/fs/cgroup/memory.current"]
+        del files["/sys/fs/cgroup/memory.stat"]
+        self.assertEqual(self.measure(files), 25 * self.GIB)
+        self.assertEqual(self.details["reclaim_estimate_status"], "unlimited-host-only")
+        self.assertIsNone(self.details["container_limit_bytes"])
+        self.assertIsNone(self.details["raw_unused_bytes"])
+        self.assertEqual(self.details["estimated_reclaimable_bytes"], 0)
+        files["/proc/meminfo"] = f"MemAvailable: {23 * self.GIB // 1024} kB\n"
+        with self.assertRaisesRegex(ValueError, "at least 24 GiB"):
+            self.measure(files)
 
 
 if __name__ == "__main__":
