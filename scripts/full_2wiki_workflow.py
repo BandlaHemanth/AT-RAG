@@ -16,6 +16,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import sys
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,30 @@ BATCH = 1000
 # Audited PR #5 commit b042922: preparation schema/parsing/count rules unchanged.
 # Retain its provenance and immutable DB hash rather than redo 1.67M occurrences.
 PREPARATION_IMPLEMENTATIONS = {"3dcb7d5352646e0af5040ae21dd1e9bff0cc3948be95fbad9cea1843b1c46aa8"}
+# Audited f570f7e preparation uses the same schema, parsing, and count checks.
+PREPARATION_IMPLEMENTATIONS.add("970cbc634ef98d4ebd7961e08cc47d689e908c12f887e8d524a251a10b2617f1")
+TRAINING_MODES = ("occurrences", "unique-paragraphs")
+ASSIGNMENT_METHOD = "single-full-occurrence-transform-v1"
+
+
+def recipe(training_mode):
+    if training_mode not in TRAINING_MODES:
+        raise ValueError(f"Unknown training mode: {training_mode}")
+    if training_mode == "occurrences":
+        return dict(RECIPE)
+    return {**RECIPE, "fit_uses_all_occurrences": False, "fit_uses_all_unique_paragraphs": True}
+
+
+def topic_configuration(info, environment, training_mode):
+    return {"protocol": PROTOCOL, "corpus_sha256": info["corpus_sha256"],
+            "training_mode": training_mode,
+            "training_documents": info["unique_texts" if training_mode == "unique-paragraphs" else "occurrences"],
+            "recipe": recipe(training_mode), "environment": environment}
+
+
+def report(progress, stage, **details):
+    if progress:
+        progress({"stage": stage, **details})
 
 
 def encoded(value):
@@ -255,12 +280,51 @@ def rows(db, start, size=None):
                          WHERE o.number>=? ORDER BY o.number LIMIT ?""", (start, size)).fetchall()
 
 
-def all_documents(root):
+def all_documents(root, training_mode="occurrences"):
     # Required global BERTopic operations, not used by cache or Chroma ingestion.
     # Intern repeated strings so the occurrence list reuses text objects.
+    recipe(training_mode)
     with database(root / "corpus.sqlite") as db:
+        if training_mode == "unique-paragraphs":
+            # Every distinct exact string, in immutable preparation order. No LIMIT/sample.
+            return [row[0] for row in db.execute("SELECT text FROM texts ORDER BY number")]
         texts = dict(db.execute("SELECT text_id,text FROM texts"))
         return [texts[text_id] for (text_id,) in db.execute("SELECT text_id FROM occurrences ORDER BY number")]
+
+
+def corpus_coverage(root, info):
+    """Fail before scientific work if rows are missing, orphaned, or not dense."""
+    with database(root / "corpus.sqlite") as db:
+        for table, key in (("questions", "questions"), ("texts", "unique_texts"), ("occurrences", "occurrences")):
+            if db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] != info[key]:
+                raise ValueError(f"Prepared {table} count differs from the full corpus")
+            if table != "questions":
+                bounds = db.execute(f"SELECT MIN(number),MAX(number) FROM {table}").fetchone()
+                if bounds != (0, info[key] - 1):
+                    raise ValueError(f"Prepared {table} numbering is not contiguous from zero")
+        if db.execute("SELECT 1 FROM occurrences o LEFT JOIN texts t ON t.text_id=o.text_id "
+                      "WHERE t.text_id IS NULL LIMIT 1").fetchone():
+            raise ValueError("An occurrence has no paragraph mapping")
+
+
+def topic_preflight(root, info, training_mode, minimum_gib=24, stage="train-topics"):
+    """Capacity estimates are safeguards, never measured peak-memory promises."""
+    configuration = topic_configuration(info, {}, training_mode)
+    corpus_coverage(root, info)
+    count = configuration["training_documents"] if stage == "train-topics" else info["occurrences"]
+    # Headroom for serializer temporary files, two models, scientific workspace,
+    # and text. Use total occurrence bytes as a conservative unique-text bound.
+    required = (3 * 1024 ** 3 + count * (384 * 4 * 3 + 1024) + 2 * info["text_bytes"]
+                if stage == "train-topics" else 1024 ** 3 + info["occurrences"] * 4 * 2)
+    free = shutil.disk_usage(root).free
+    if free < required:
+        raise ValueError(f"{stage} ({training_mode}) needs an estimated {required} free disk bytes; "
+                         f"only {free} available. No sampling or parameter fallback is performed")
+    available = memory_guard(minimum_gib)
+    return {"stage": "resource-preflight", "operation": stage, "training_mode": training_mode, "documents": count,
+            "occurrences": info["occurrences"], "minimum_available_memory_gib": minimum_gib,
+            "available_memory_bytes": available, "estimated_free_disk_bytes": required,
+            "available_disk_bytes": free, "capacity_guaranteed": False}
 
 
 def memory_guard(minimum_gib):
@@ -273,6 +337,7 @@ def memory_guard(minimum_gib):
         available = min(available or math.inf, max(0, int(limit.read_text()) - int(usage.read_text())))
     if available is None or available < minimum_gib * 1024 ** 3:
         raise ValueError(f"Stage requires at least {minimum_gib} GiB available. No model-setting or index-setting fallback is performed")
+    return available
 
 
 def saved_model(model, path):
@@ -303,12 +368,15 @@ def resolved_parameters(model):
             for name in ("umap_model", "hdbscan_model", "vectorizer_model") if hasattr(model, name)}
 
 
-def topic_manifest(root, info, environment, allow_unverified=False):
+def topic_manifest(root, info, environment, allow_unverified=False, training_mode=None):
     manifest = read(root / "topics.json")
     producer = manifest.get("configuration", {}).get("environment")
-    expected = {"protocol": PROTOCOL, "corpus_sha256": info["corpus_sha256"],
-                "recipe": RECIPE, "environment": producer}
-    if manifest.get("status") != "complete" or manifest.get("configuration") != expected:
+    mode = manifest.get("configuration", {}).get("training_mode")
+    if mode not in TRAINING_MODES or (training_mode is not None and mode != training_mode):
+        raise ValueError("Topic model provenance has an incompatible training mode")
+    expected = topic_configuration(info, producer, mode)
+    if (manifest.get("status") != "complete" or manifest.get("configuration") != expected or
+            manifest.get("configuration_sha256") != identity(expected)):
         raise ValueError("Topic model provenance is incompatible; the old custom 418-topic model is not accepted")
     if digest(root / "bertopic_model") != manifest["model_sha256"]:
         raise ValueError("Saved full-training topic model changed")
@@ -362,7 +430,7 @@ def compare_probes(expected, actual):
                 raise ValueError("Model compatibility probe probabilities differ (atol=rtol=1e-6)")
 
 
-def verify_model(root, environment, loader=None):
+def verify_model(root, environment, loader=None, training_mode=None):
     """Explicit Kaggle check, separate from the original global topic transform.
 
     Source environment writes reference outputs from a freshly loaded pickle.
@@ -370,7 +438,7 @@ def verify_model(root, environment, loader=None):
     Only training paragraph text and a fixed neutral query are used, never gold.
     """
     info = prepared(root)
-    manifest = topic_manifest(root, info, environment, allow_unverified=True)
+    manifest = topic_manifest(root, info, environment, allow_unverified=True, training_mode=training_mode)
     producer = manifest["configuration"]["environment"]
     reference_path = root / "model_probe_reference.json"
     if not reference_path.exists() and producer != environment:
@@ -404,35 +472,53 @@ def verify_model(root, environment, loader=None):
     return certificate
 
 
-def train_topics(root, environment, minimum_gib=24, factory=None, loader=None):
+def train_topics(root, environment, minimum_gib=24, factory=None, loader=None,
+                 training_mode="occurrences", progress=None):
     if environment.get("profile", "training") != "training":
         raise ValueError("train-topics requires the training-only environment")
     info = prepared(root)
-    configuration = {"protocol": PROTOCOL, "corpus_sha256": info["corpus_sha256"],
-                     "recipe": RECIPE, "environment": environment}
+    configuration = topic_configuration(info, environment, training_mode)
+    fingerprint = identity(configuration)
     if (root / "topics.json").exists():
-        return topic_manifest(root, info, environment)
-    memory_guard(minimum_gib)
-    documents = all_documents(root)
-    checkpoint = root / "fit.json"
+        return topic_manifest(root, info, environment, training_mode=training_mode)
+    # Distinct filenames AND mode-bound fingerprints. Never relabel old fits.
+    suffix = ".unique-paragraphs" if training_mode == "unique-paragraphs" else ""
+    checkpoint = root / f"fit{suffix}.json"
+    fit_path = root / f"fit_model{suffix}"
+    fit = read(checkpoint) if checkpoint.exists() else None
+    if fit is not None and (fit.get("configuration") != configuration or
+                fit.get("configuration_sha256") != fingerprint or digest(fit_path) != fit["sha256"]):
+        raise ValueError("Fit checkpoint changed or belongs to different data/settings/environment/training mode")
+    report(progress, **topic_preflight(root, info, training_mode, minimum_gib))
+    started = time.monotonic()
+    report(progress, "load-training-documents", documents=configuration["training_documents"], training_mode=training_mode)
+    documents = all_documents(root, training_mode)
+    if len(documents) != configuration["training_documents"]:
+        raise ValueError("Training documents do not cover the entire selected corpus")
     if checkpoint.exists():
-        fit = read(checkpoint)
-        if fit["configuration"] != configuration or digest(root / "fit_model") != fit["sha256"]:
-            raise ValueError("Fit checkpoint changed or belongs to different data/settings/environment")
-        model = (loader or model_class().load)(str(root / "fit_model"))
+        report(progress, "load-completed-fit", configuration_sha256=fingerprint)
+        model = (loader or model_class().load)(str(fit_path))
     else:
+        report(progress, "fit-start", documents=len(documents), training_mode=training_mode,
+               note="Global BERTopic call; no internal progress percentage is available")
         model = (factory or model_class())(min_topic_size=50)
-        model.fit_transform(documents)  # All occurrences; no cached retrieval vectors supplied.
-        saved_model(model, root / "fit_model")
-        atomic(checkpoint, {"configuration": configuration, "sha256": digest(root / "fit_model")})
+        model.fit_transform(documents)  # Entire selected corpus; no retrieval vectors supplied.
+        saved_model(model, fit_path)
+        atomic(checkpoint, {"configuration": configuration, "configuration_sha256": fingerprint,
+                            "sha256": digest(fit_path)})
+        report(progress, "fit-checkpoint-saved", elapsed_seconds=round(time.monotonic() - started, 1))
+    report(progress, "reduction-start", documents=len(documents), nr_topics=20)
     model = model.reduce_topics(documents, nr_topics=20)
     saved_model(model, root / "bertopic_model")
     manifest = {"status": "complete", "configuration": configuration,
+                "configuration_sha256": fingerprint,
                 "model_sha256": digest(root / "bertopic_model"),
                 "resolved_components": resolved_parameters(model),
                 "embedding_backend": repr(getattr(model, "embedding_model", None)),
                 "regular_topics": len(set(getattr(model, "topics_", [])) - {-1})}
     atomic(root / "topics.json", manifest)
+    report(progress, "topics-checkpoint-saved", elapsed_seconds=round(time.monotonic() - started, 1),
+           regular_topics=manifest["regular_topics"])
     return manifest
 
 
@@ -440,23 +526,33 @@ def assignment_manifest(root, info, model):
     manifest = read(root / "assignments.json")
     if (manifest.get("status") != "complete" or manifest["corpus_sha256"] != info["corpus_sha256"] or
             manifest["model_sha256"] != model["model_sha256"] or
+            manifest.get("topic_configuration_sha256") != model["configuration_sha256"] or
+            manifest.get("method") != ASSIGNMENT_METHOD or manifest.get("occurrences") != info["occurrences"] or
             digest(root / "topics.npy") != manifest["assignments_sha256"]):
         raise ValueError("Topic assignments are incomplete or incompatible")
     return manifest
 
 
-def assign_topics(root, environment, minimum_gib=24, loader=None):
+def assign_topics(root, environment, minimum_gib=24, loader=None, training_mode=None, progress=None):
     if environment.get("profile", "training") != "training":
         raise ValueError("assign-topics requires the training-only environment")
     import numpy as np
     info = prepared(root)
-    model = topic_manifest(root, info, environment)
+    model = topic_manifest(root, info, environment, training_mode=training_mode)
     if (root / "assignments.json").exists():
         return assignment_manifest(root, info, model)
-    memory_guard(minimum_gib)
+    mode = model["configuration"]["training_mode"]
+    report(progress, **topic_preflight(root, info, mode, minimum_gib, stage="assign-topics"))
+    started = time.monotonic()
+    report(progress, "load-frozen-model", training_mode=mode)
     loaded = (loader or model_class().load)(str(root / "bertopic_model"))
     documents = all_documents(root)
+    if len(documents) != info["occurrences"]:
+        raise ValueError("Assignment documents do not cover every original occurrence")
+    report(progress, "transform-start", occurrences=len(documents), method=ASSIGNMENT_METHOD,
+           note="Single global transform; unique-text/batched inference is not assumed equivalent")
     topics, _ = loaded.transform(documents)  # Original single whole-corpus transform.
+    del documents
     topics = np.asarray(topics)
     if topics.shape != (info["occurrences"],) or topics.dtype.kind not in "iu" or np.any(topics < -1):
         raise ValueError("Invalid occurrence-level topic assignments")
@@ -467,10 +563,13 @@ def assign_topics(root, environment, minimum_gib=24, loader=None):
         os.fsync(stream.fileno())
     os.replace(temporary, root / "topics.npy")
     manifest = {"status": "complete", "corpus_sha256": info["corpus_sha256"],
+                "topic_configuration_sha256": model["configuration_sha256"], "method": ASSIGNMENT_METHOD,
                 "model_sha256": model["model_sha256"], "assignments_sha256": digest(root / "topics.npy"),
                 "occurrences": len(topics), "regular_topics": int(len(set(topics.tolist()) - {-1})),
                 "outlier_occurrences": int(np.sum(topics == -1))}
     atomic(root / "assignments.json", manifest)
+    report(progress, "assignments-checkpoint-saved", occurrences=len(topics),
+           elapsed_seconds=round(time.monotonic() - started, 1))
     return manifest
 
 
@@ -653,10 +752,10 @@ def remaining_disk_estimate(info, next_row):
     return remaining * (384 * 4 * 3 + 512) + math.ceil(2 * info["text_bytes"] * remaining / info["occurrences"])
 
 
-def ingest(root, environment, factory=None, progress=None, minimum_free_bytes=None, minimum_gib=8):
+def ingest(root, environment, factory=None, progress=None, minimum_free_bytes=None, minimum_gib=8, training_mode=None):
     import numpy as np
     info = prepared(root)
-    model = topic_manifest(root, info, environment)
+    model = topic_manifest(root, info, environment, training_mode=training_mode)
     assignments = assignment_manifest(root, info, model)
     cache = cache_manifest(root, info, environment)
     topics = np.load(root / "topics.npy", mmap_mode="r", allow_pickle=False)
@@ -709,13 +808,13 @@ def ingest(root, environment, factory=None, progress=None, minimum_free_bytes=No
     return job
 
 
-def verify_completed(root, environment, factory=None):
+def verify_completed(root, environment, factory=None, training_mode=None):
     import numpy as np
     job = read(root / "ingestion.json")
     if not job.get("complete") or not (root / "chroma").is_dir():
         raise ValueError("No completed Chroma store; verification never creates a new one")
     info = prepared(root)
-    model = topic_manifest(root, info, environment)
+    model = topic_manifest(root, info, environment, training_mode=training_mode)
     assignments = assignment_manifest(root, info, model)
     cache = cache_manifest(root, info, environment)
     if job["configuration"] != index_configuration(info, model, assignments, cache, environment):
@@ -735,12 +834,16 @@ def main(argv=None):
     parser.add_argument("--heldout", type=Path, help="Held-out dev/test JSONL; only question IDs are inspected")
     parser.add_argument("--training-requirements", type=Path, help="Original immutable 62-package training freeze (Python 3.12.3)")
     parser.add_argument("--reuse-embeddings", type=Path, help="Optional complete legacy embedding directory (cache only)")
+    parser.add_argument("--training-mode", choices=TRAINING_MODES,
+                        help="train-topics/preflight: default occurrences; other model stages validate the frozen model mode")
     parser.add_argument("--environment-profile", choices=["training", "retrieval"],
                         help="preflight/verify-model: default training; other stages select and enforce their profile")
     args = parser.parse_args(argv)
     root = args.workdir.resolve()
     try:
         with lock(root):
+            if args.training_mode and args.stage in {"prepare", "status", "cache"}:
+                raise ValueError("--training-mode applies to model/preflight/index stages only")
             if args.stage == "prepare":
                 if not args.input or args.input.name != "train.jsonl" or not args.heldout:
                     raise ValueError("prepare requires the full train.jsonl and --heldout JSONL")
@@ -748,7 +851,7 @@ def main(argv=None):
                                  progress=lambda state: print(f"Prepared {state['occurrences']} occurrences", flush=True))
             elif args.stage == "status":
                 result = {name: read(root / name) for name in (
-                    "preparation.json", "cache.json", "fit.json", "topics.json", "assignments.json", "model_compatibility.json", "ingestion.json") if (root / name).exists()}
+                    "preparation.json", "cache.json", "fit.json", "fit.unique-paragraphs.json", "topics.json", "assignments.json", "model_compatibility.json", "ingestion.json") if (root / name).exists()}
             else:
                 if not args.training_requirements:
                     raise ValueError("This stage requires --training-requirements")
@@ -760,20 +863,26 @@ def main(argv=None):
                 environment = runtime(args.training_requirements, required_profile)
                 if args.stage == "preflight":
                     result = environment
+                    if args.training_mode:
+                        result = {"environment": environment, "resources": topic_preflight(
+                            root, prepared(root), args.training_mode)}
                 elif args.stage == "verify-model":
-                    result = verify_model(root, environment)
+                    result = verify_model(root, environment, training_mode=args.training_mode)
                 elif args.stage == "cache":
                     result = build_cache(root, environment, reuse=args.reuse_embeddings,
                                          progress=lambda state: print(f"Cached {state['next']} unique texts", flush=True))
                 elif args.stage == "train-topics":
-                    result = train_topics(root, environment)
+                    result = train_topics(root, environment, training_mode=args.training_mode or "occurrences",
+                                          progress=lambda state: print(json.dumps(state, sort_keys=True), flush=True))
                 elif args.stage == "assign-topics":
-                    result = assign_topics(root, environment)
+                    result = assign_topics(root, environment, training_mode=args.training_mode,
+                                           progress=lambda state: print(json.dumps(state, sort_keys=True), flush=True))
                 elif args.stage == "ingest":
                     result = ingest(root, environment,
-                                    progress=lambda state: print(f"Upserting from occurrence {state['next']}", flush=True))
+                                    progress=lambda state: print(f"Upserting from occurrence {state['next']}", flush=True),
+                                    training_mode=args.training_mode)
                 else:
-                    result = verify_completed(root, environment)
+                    result = verify_completed(root, environment, training_mode=args.training_mode)
             print(json.dumps(result, indent=2, sort_keys=True))
         return 0
     except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError, sqlite3.Error) as error:

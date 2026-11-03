@@ -254,6 +254,215 @@ class WorkflowTests(unittest.TestCase):
         w.train_topics(self.root, self.environment, factory=TopicModel, loader=TopicModel.load)
         self.assertEqual(len(TopicModel.fits), 1)
 
+    def test_unique_mode_fits_and_reduces_every_exact_paragraph_without_sampling(self):
+        info = self.prepare()
+        before = w.digest(self.root / "corpus.sqlite")
+        events = []
+        factory = mock.Mock(side_effect=TopicModel)
+        result = w.train_topics(self.root, self.environment, factory=factory,
+                                training_mode="unique-paragraphs", progress=events.append)
+        factory.assert_called_once_with(min_topic_size=50)
+        expected = [" shared\n東京 ", "beta", "gamma", "delta"]
+        self.assertEqual(TopicModel.fits, [expected])
+        self.assertEqual(TopicModel.reductions, [expected])
+        self.assertEqual(result["configuration"]["training_documents"], info["unique_texts"])
+        self.assertEqual(result["configuration"]["recipe"], {
+            **w.RECIPE, "fit_uses_all_occurrences": False, "fit_uses_all_unique_paragraphs": True})
+        self.assertEqual(result["configuration_sha256"], w.identity(result["configuration"]))
+        self.assertEqual([e["stage"] for e in events], [
+            "resource-preflight", "load-training-documents", "fit-start", "fit-checkpoint-saved",
+            "reduction-start", "topics-checkpoint-saved"])
+        self.assertEqual(w.digest(self.root / "corpus.sqlite"), before)
+
+    def test_unique_training_assigns_every_occurrence_in_original_order_and_preserves_metadata(self):
+        self.prepare()
+        w.train_topics(self.root, self.environment, factory=TopicModel, training_mode="unique-paragraphs")
+        events = []
+        assignments = w.assign_topics(self.root, self.environment, loader=TopicModel.load,
+                                      training_mode="unique-paragraphs", progress=events.append)
+        # Position-sensitive fake: deduplicating/batching this transform would change the result.
+        expected = [c["paragraph_text"] for q in self.questions for c in q["contexts"]]
+        self.assertEqual(TopicModel.transforms, [expected])
+        self.assertEqual(assignments["occurrences"], 7)
+        self.assertEqual(assignments["method"], w.ASSIGNMENT_METHOD)
+        self.assertEqual(events[-1]["stage"], "assignments-checkpoint-saved")
+        w.build_cache(self.root, self.environment, embedder=Encoder())
+        store = Store()
+        w.ingest(self.root, self.environment, factory=store.factory, minimum_free_bytes=0,
+                 training_mode="unique-paragraphs")
+        self.assertEqual(store.count(), 7)
+        self.assertEqual(sum(row[0] == "beta" for row in store.data.values()), 3)
+        with w.database(self.root / "corpus.sqlite") as db:
+            labels = np.load(self.root / "topics.npy", allow_pickle=False)
+            for record in w.records(w.rows(db, 0), w.digest(self.train), labels):
+                self.assertEqual(store.data[record["id"]][:2], (record["document"], record["metadata"]))
+        self.assertEqual(w.verify_completed(self.root, self.environment, factory=store.factory)["occurrences"], 7)
+
+    def test_separate_mode_fit_checkpoints_resume_without_cross_reuse(self):
+        self.prepare()
+        TopicModel.fail_reduce = True
+        for mode in w.TRAINING_MODES:
+            with self.assertRaises(Interrupted):
+                w.train_topics(self.root, self.environment, factory=TopicModel, training_mode=mode)
+        occurrence_fit = w.read(self.root / "fit.json")
+        unique_fit = w.read(self.root / "fit.unique-paragraphs.json")
+        self.assertNotEqual(occurrence_fit["configuration_sha256"], unique_fit["configuration_sha256"])
+        self.assertEqual([len(d) for d in TopicModel.fits], [7, 4])
+        TopicModel.fail_reduce = False
+        w.train_topics(self.root, self.environment, factory=TopicModel, loader=TopicModel.load,
+                       training_mode="unique-paragraphs")
+        self.assertEqual([len(d) for d in TopicModel.fits], [7, 4])
+        with self.assertRaisesRegex(ValueError, "training mode"):
+            w.train_topics(self.root, self.environment, training_mode="occurrences")
+
+    def test_incompatible_or_renamed_fit_is_rejected_before_model_loading(self):
+        self.prepare()
+        TopicModel.fail_reduce = True
+        with self.assertRaises(Interrupted):
+            w.train_topics(self.root, self.environment, factory=TopicModel)
+        (self.root / "fit.unique-paragraphs.json").write_bytes((self.root / "fit.json").read_bytes())
+        (self.root / "fit_model.unique-paragraphs").write_bytes((self.root / "fit_model").read_bytes())
+        loader = mock.Mock()
+        with self.assertRaisesRegex(ValueError, "training mode"):
+            w.train_topics(self.root, self.environment, loader=loader, training_mode="unique-paragraphs")
+        loader.assert_not_called()
+        # Legacy occurrence checkpoint without a mode/fingerprint must also stop.
+        checkpoint = w.read(self.root / "fit.json")
+        del checkpoint["configuration"]["training_mode"]
+        w.atomic(self.root / "fit.json", checkpoint)
+        with self.assertRaisesRegex(ValueError, "checkpoint"):
+            w.train_topics(self.root, self.environment, loader=loader)
+
+    def test_assignment_mode_and_fingerprint_mismatch_are_refused(self):
+        self.prepare()
+        w.train_topics(self.root, self.environment, factory=TopicModel, training_mode="unique-paragraphs")
+        loader = mock.Mock()
+        with self.assertRaisesRegex(ValueError, "training mode"):
+            w.assign_topics(self.root, self.environment, loader=loader, training_mode="occurrences")
+        loader.assert_not_called()
+        w.assign_topics(self.root, self.environment, loader=TopicModel.load)
+        model = w.read(self.root / "topics.json")
+        manifest = w.read(self.root / "assignments.json")
+        for key, bad in (("topic_configuration_sha256", "other-mode"), ("occurrences", 4), ("method", "unique-transform")):
+            w.atomic(self.root / "assignments.json", {**manifest, key: bad})
+            with self.assertRaisesRegex(ValueError, "incompatible"):
+                w.assignment_manifest(self.root, w.prepared(self.root), model)
+
+    def test_changed_topic_configuration_fingerprint_is_refused(self):
+        self.topics()
+        model = w.read(self.root / "topics.json")
+        model["configuration_sha256"] = "invalid"
+        w.atomic(self.root / "topics.json", model)
+        with self.assertRaisesRegex(ValueError, "provenance"):
+            w.topic_manifest(self.root, w.prepared(self.root), self.environment)
+
+    def test_disk_preflight_stops_before_documents_or_model_and_does_not_fallback(self):
+        self.prepare()
+        with mock.patch.object(w.shutil, "disk_usage", return_value=mock.Mock(free=0)):
+            for mode in w.TRAINING_MODES:
+                with mock.patch.object(w, "all_documents") as documents, mock.patch.object(w, "model_class") as factory:
+                    with self.assertRaisesRegex(ValueError, "No sampling or parameter fallback"):
+                        w.train_topics(self.root, self.environment, training_mode=mode)
+                    documents.assert_not_called()
+                    factory.assert_not_called()
+        self.assertFalse((self.root / "topics.json").exists())
+
+    def test_preflight_distinguishes_modes_and_includes_full_assignment_coverage(self):
+        info = self.prepare()
+        unique = w.topic_preflight(self.root, info, "unique-paragraphs")
+        occurrences = w.topic_preflight(self.root, info, "occurrences")
+        assignment = w.topic_preflight(self.root, info, "unique-paragraphs", stage="assign-topics")
+        self.assertEqual((unique["documents"], occurrences["documents"], assignment["documents"]), (4, 7, 7))
+        self.assertLess(unique["estimated_free_disk_bytes"], occurrences["estimated_free_disk_bytes"])
+        self.assertFalse(unique["capacity_guaranteed"])
+
+    def test_corpus_coverage_refuses_missing_or_orphaned_occurrences_and_numbering_gaps(self):
+        info = self.prepare()
+        with w.database(self.root / "corpus.sqlite", write=True) as db:
+            db.execute("UPDATE occurrences SET text_id='absent' WHERE number=6")
+            db.commit()
+        with self.assertRaisesRegex(ValueError, "no paragraph mapping"):
+            w.corpus_coverage(self.root, info)
+        with w.database(self.root / "corpus.sqlite", write=True) as db:
+            db.execute("UPDATE occurrences SET number=7 WHERE number=6")
+            db.commit()
+        with self.assertRaisesRegex(ValueError, "not contiguous"):
+            w.corpus_coverage(self.root, info)
+        with w.database(self.root / "corpus.sqlite", write=True) as db:
+            db.execute("DELETE FROM occurrences WHERE number=7")
+            db.commit()
+        with self.assertRaisesRegex(ValueError, "count differs"):
+            w.corpus_coverage(self.root, info)
+
+    def test_invalid_or_short_transform_never_publishes_assignments(self):
+        self.prepare()
+        w.train_topics(self.root, self.environment, factory=TopicModel, training_mode="unique-paragraphs")
+        for labels in ([0] * 4, [0.] * 7, [-2] * 7):
+            fake = mock.Mock()
+            fake.transform.return_value = labels, None
+            with self.assertRaisesRegex(ValueError, "occurrence-level"):
+                w.assign_topics(self.root, self.environment, loader=lambda _: fake)
+            self.assertFalse((self.root / "assignments.json").exists())
+
+    def test_full_size_occurrence_assignment_mapping_covers_last_record_and_batch_remainder(self):
+        # Full occurrence count with synthetic arrays/rows; no dataset preparation,
+        # BERTopic training, model weights, or Chroma creation.
+        count = w.COUNTS["occurrences"]
+        labels = np.arange(count, dtype="<i4") % 21 - 1
+        source_sha = "synthetic-full-size"
+        observed = 0
+        for start in range(0, count, w.BATCH):
+            batch = [(n, f"text-{n % 4}", f"paragraph-{n % 4}", json.dumps({"idx": n}))
+                     for n in range(start, min(start + w.BATCH, count))]
+            mapped = w.records(batch, source_sha, labels)
+            self.assertEqual(len(mapped), len(batch))
+            for number, record in zip(range(start, start + len(batch)), mapped):
+                self.assertEqual(record["metadata"], {"idx": number, "bertopic": f"Topic {int(labels[number])}"})
+            observed += len(mapped)
+        self.assertEqual(observed, 1674540)
+        self.assertEqual(mapped[-1]["id"], w.occurrence_id(source_sha, 1674539))
+        self.assertEqual(len(mapped), 540)
+
+    def test_unique_cli_passes_explicit_mode_and_preserves_training_profile(self):
+        with mock.patch.object(w, "runtime", return_value=self.environment) as runtime:
+            with mock.patch.object(w, "train_topics", return_value={}) as train, mock.patch("builtins.print"):
+                code = w.main(["train-topics", "--training-mode", "unique-paragraphs", "--workdir", str(self.root),
+                               "--training-requirements", "original-62.txt"])
+        self.assertEqual(code, 0)
+        self.assertEqual(runtime.call_args.args[1], "training")
+        self.assertEqual(train.call_args.kwargs["training_mode"], "unique-paragraphs")
+
+    def test_both_approved_backup_producers_train_unique_without_repreparation_or_db_changes(self):
+        actual_digest = w.digest
+        for producer in sorted(w.PREPARATION_IMPLEMENTATIONS):
+            with self.subTest(producer=producer):
+                self.root = self.directory / f"backup-{producer[:8]}"
+                self.root.mkdir()
+
+                def producer_digest(path):
+                    return producer if Path(path).resolve() == Path(w.__file__).resolve() else actual_digest(path)
+
+                with mock.patch.object(w, "digest", side_effect=producer_digest):
+                    backup = self.prepare()
+                before = actual_digest(self.root / "corpus.sqlite")
+                with mock.patch.object(w, "prepare", side_effect=AssertionError("Do not repeat preparation")):
+                    self.assertEqual(w.prepared(self.root), backup)
+                    w.train_topics(self.root, self.environment, factory=TopicModel, training_mode="unique-paragraphs")
+                self.assertEqual(actual_digest(self.root / "corpus.sqlite"), before)
+                self.assertEqual(w.read(self.root / "preparation.json"), backup)
+
+    def test_failed_unique_fit_does_not_create_success_checkpoint(self):
+        self.prepare()
+        broken = mock.Mock()
+        broken.fit_transform.side_effect = Interrupted("during global fit")
+        with self.assertRaises(Interrupted):
+            w.train_topics(self.root, self.environment, factory=lambda **_: broken, training_mode="unique-paragraphs")
+        broken.save.assert_not_called()
+        self.assertFalse((self.root / "fit.unique-paragraphs.json").exists())
+        self.assertFalse((self.root / "topics.json").exists())
+        w.train_topics(self.root, self.environment, factory=TopicModel, training_mode="unique-paragraphs")
+        self.assertEqual([len(d) for d in TopicModel.fits], [4])
+
     def test_custom_topic_model_recipe_is_refused(self):
         self.topics()
         manifest = w.read(self.root / "topics.json")
