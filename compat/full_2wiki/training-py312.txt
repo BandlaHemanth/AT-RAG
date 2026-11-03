@@ -1,0 +1,14 @@
+# Training-only overlay on the exact original 62-package record (Python 3.12.3).
+# No LangChain, LangGraph, Chroma, or retrieval integrations.
+bertopic==0.16.3
+transformers==4.45.1
+sentence-transformers==5.7.0
+torch==2.14.1
+numpy==1.26.4
+scikit-learn==1.9.1
+scipy==1.17.1
+umap-learn==0.5.12
+hdbscan==0.8.44
+numba==0.68.0
+llvmlite==0.50.0
+packaging==26.3
