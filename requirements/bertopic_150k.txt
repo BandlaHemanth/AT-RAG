@@ -1,0 +1,21 @@
+# Python 3.12 reference environment used for the tiny synthetic integration test.
+# Install in an isolated environment; preserve older saved-model environments.
+# torch==2.5.1 also accepts the 2.5.1+cpu build in the existing CPU environment.
+numpy==1.26.4
+bertopic==0.16.3
+sentence-transformers==3.1.1
+transformers==4.45.1
+tokenizers==0.20.3
+torch==2.5.1
+huggingface-hub==0.36.2
+safetensors==0.8.0
+umap-learn==0.5.12
+hdbscan==0.8.44
+scikit-learn==1.9.1
+scipy==1.17.1
+pandas==2.2.3
+numba==0.68.0
+llvmlite==0.50.0
+pynndescent==0.6.0
+joblib==1.6.0
+threadpoolctl==3.7.0
