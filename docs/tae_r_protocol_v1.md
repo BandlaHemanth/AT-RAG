@@ -218,8 +218,8 @@ paragraph of the topic-fitting population, final and validation retrieval corpor
 - Embedding input `documents.jsonl`: 402,504 paragraphs, SHA-256 `92cbd1f8427ba0dd3bedaf58bbf3d56642f290ba7d2d9ef35728a73c79f3fbcc`
 - Model: `sentence-transformers/all-MiniLM-L6-v2`, revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`; text unchanged, no prefix; max length 256; L2-normalized; float32; 384 dimensions
 - Run: Tesla T4, CUDA, batch size 128, deterministic algorithms; torch 2.11.0+cu128, sentence-transformers 5.7.0, transformers 5.16.1
-- `embeddings.npy` (402,504 x 384): 618,246,272 bytes; embedding data SHA-256 `31f4ca2c70384577d18d11da3b7f8f92943d5c468516888ad1f401c1a56eab6d`
-- `document_ids.jsonl`: 38,529,274 bytes; row order equals the input file order (sorted by document_id)
+- `embeddings.npy` (402,504 x 384): 618,246,272 bytes; file SHA-256 `19c5b4d6cb3bf0773f848a0a490f8787d8af8025ef616f5c6a074df0c0abd809` (checked on the laptop copy); embedding data SHA-256 `31f4ca2c70384577d18d11da3b7f8f92943d5c468516888ad1f401c1a56eab6d`
+- `document_ids.jsonl`: 38,529,274 bytes; file SHA-256 `af08575835f1db2dd3ac445e1ff47650faab416e796d50558fee093fec9d80ee`; row order equals the input file order (sorted by document_id)
 - Verified: all artifact hashes match the manifest; ids match input order; all values finite; norms 0.9999999 to 1.0000001
 - These embeddings are a new set. They are not mixed with the earlier 396,978-paragraph embeddings, which came from a different software environment.
 
