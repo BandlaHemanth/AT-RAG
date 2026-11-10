@@ -209,3 +209,17 @@ evaluation_and_heldout` at commit `2a280e5`, from the frozen splits.
 - Measured: 312,555 text-level population - 11,976 title-excluded = 300,579, as expected in v1.1.
 - Blank contexts skipped: 0. Questions without gold paragraphs: 0.
 
+### Embedding record (run 01, 10 November 2026)
+
+Built by `scripts/prepare_tae_r_embedding_input.py` and
+`scripts/embed_full_2wiki_corpus.py` at commit `88da6bc`; one embedding per unique
+paragraph of the topic-fitting population, final and validation retrieval corpora.
+
+- Embedding input `documents.jsonl`: 402,504 paragraphs, SHA-256 `92cbd1f8427ba0dd3bedaf58bbf3d56642f290ba7d2d9ef35728a73c79f3fbcc`
+- Model: `sentence-transformers/all-MiniLM-L6-v2`, revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`; text unchanged, no prefix; max length 256; L2-normalized; float32; 384 dimensions
+- Run: Tesla T4, CUDA, batch size 128, deterministic algorithms; torch 2.11.0+cu128, sentence-transformers 5.7.0, transformers 5.16.1
+- `embeddings.npy` (402,504 x 384): 618,246,272 bytes; embedding data SHA-256 `31f4ca2c70384577d18d11da3b7f8f92943d5c468516888ad1f401c1a56eab6d`
+- `document_ids.jsonl`: 38,529,274 bytes; row order equals the input file order (sorted by document_id)
+- Verified: all artifact hashes match the manifest; ids match input order; all values finite; norms 0.9999999 to 1.0000001
+- These embeddings are a new set. They are not mixed with the earlier 396,978-paragraph embeddings, which came from a different software environment.
+
