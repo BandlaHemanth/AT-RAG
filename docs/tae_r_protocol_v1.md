@@ -192,3 +192,20 @@ Changes (nothing else in v1 changes; no result existed when this was decided):
 
 Measured values in this section come from the measure run; the build manifest
 records the final figures and corpus hashes.
+
+### Corpus build record (run 01, 10 November 2026)
+
+Built by `scripts/build_tae_r_corpora.py --mode build --title-exclusion
+evaluation_and_heldout` at commit `2a280e5`, from the frozen splits.
+
+- Corpus manifest SHA-256: `d6905fc1c4c64f71c394b15c1fbdcc3c8d6e7a15c7e3b55c710673181057d96e`
+- topic_fit_population: 300,579 paragraphs, `cf62736df31d260b2c07ed8387b6d14eef38897e4cd02491a4e4ae01c73faa49`
+- retrieval_final: 56,680 paragraphs, `9ec5e936b624505dccd612dabb150527851187ab83cd3781e9be725cc3f0d973`
+- retrieval_validation: 56,655 paragraphs, `31a79687e023a2a332f5b14e32f4d96bf9d4ad04bfdf610250c0716509b9357f`
+- questions_final_eval: 11,976, `6d05dc628e5a838bd20dfc8bbc23afd6bade1c5f9556a546a36cef14927c8035`
+- questions_router_train: 8,000, `0c39dd5c728680915b537eeb653e0b828eea7d8f30f53cbb61b55fc63cd5616f`
+- questions_validation: 4,576, `0c2a252ae7787b105e321ba2822822d2759eeab9490a8439c28685f276b476af`
+- excluded_by_title_doc_ids: 11,976, `4a7319171d81fe6886dabc42807264ac4cece601f8243ccd1b7769ad1118fc49`
+- Measured: 312,555 text-level population - 11,976 title-excluded = 300,579, as expected in v1.1.
+- Blank contexts skipped: 0. Questions without gold paragraphs: 0.
+
