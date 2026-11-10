@@ -1,8 +1,8 @@
-# TAE-R experimental protocol v1 (DRAFT, not yet frozen)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026)
 
-Status: draft for review on 10 November 2026. It becomes frozen when the split
-manifest hash and the commit that contains this file are recorded in section 9.
-After freezing, any change is a new protocol version with a stated reason.
+Status: frozen on 10 November 2026 with the record in section 9, before any
+validation or final-evaluation result exists. Any later change is a new
+protocol version with a stated reason.
 
 This protocol governs the controlled TAE-R experiments. It does not amend
 `docs/tae_v2_150k_protocol.md`; the pilot, TAE V1 and 150k results remain
@@ -65,9 +65,10 @@ Rules:
 
 **Topic-fitting population.** Unique paragraph texts of topic_fit questions
 that occur in no `dev.jsonl`, subsampled, router_train or validation context.
-Upper bound from the audit before removing the held-out training folds:
-357,742. The exact count is the `topic_fit_population` value in the split
-manifest and is recorded in section 9. Used only to fit the topic model.
+The audit's 357,742 was an upper bound that removed only evaluation-file texts.
+The split manifest measured the true value after also removing router_train and
+validation texts: 312,555. Title-level exclusion (below) reduces it by 7,114 to
+305,441. Used only to fit the topic model.
 
 **Final retrieval corpus.** Every unique paragraph of every `dev.jsonl`
 context, supporting and distractor, selected without reading support flags
@@ -83,11 +84,11 @@ by inference only. The topic model is never refitted on them. Consequently
 every searchable document is out-of-sample for the topic model, under
 validation and under final evaluation alike.
 
-Known limitation: exclusion is by exact text. The split manifest reports how
-many topic-fitting texts share a title with an evaluation paragraph
-(`topic_fit_population_texts_whose_title_occurs_in_evaluation_files`); the
-decision to exclude by title as well is taken from that number before freezing
-and written in section 9.
+Exclusion is by exact text and also by title: the 7,114 topic-fitting texts
+whose title occurs in any evaluation file are excluded as well
+(`topic_fit_population_texts_whose_title_occurs_in_evaluation_files`), because
+same-title paragraphs are likely near-copies of evaluation paragraphs. The
+population builder applies this rule and reports the resulting count.
 
 ## 4. Topic model
 
@@ -158,10 +159,15 @@ An efficiency advantage is claimed only if TAE-R is better or equivalent
 - No significance claim from differences whose interval includes 0.
 - Negative results are reported.
 
-## 9. Freeze record (to be completed)
+## 9. Freeze record
 
-- Split manifest SHA-256:
-- Measured topic-fitting population:
-- Title-level exclusion decision:
-- Commit containing this protocol:
-- Date frozen:
+- Split manifest SHA-256: `44e79c259e5f0ac55eee8f83fb65493b70432fb276a80809621919ec35ba38ce`
+- Split script SHA-256: `864f474f9c0ff1125f431826f8cba55270d50f05bd27b12e96113a59bdb3fce8` (seed 20261110, run on commit `5d7fd89`)
+- Split archive `tae_r_splits_v1_run01.zip` SHA-256: `1df5550e379dd566688ebcee795dac48a1b107723a58952fd271c7c0df63d387`
+- Split sizes: exposed 600; final_eval 11,976; e2e 300 and 500; router_train 8,000; validation 4,576; topic_fit 154,878
+- Measured topic-fitting population (text exclusion): 312,555
+- Title-level exclusion decision: exclude 7,114 texts; expected population 305,441
+- Retrieval corpora: final 56,680 unique texts; validation 56,655
+- Gates and thresholds: as in section 7, unchanged from the draft
+- Commit containing this protocol: the commit that adds this record
+- Date frozen: 2026-11-10
