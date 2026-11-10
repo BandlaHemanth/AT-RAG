@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendment v1.1 in section 10)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -171,3 +171,24 @@ An efficiency advantage is claimed only if TAE-R is better or equivalent
 - Gates and thresholds: as in section 7, unchanged from the draft
 - Commit containing this protocol: the commit that adds this record
 - Date frozen: 2026-11-10
+
+## 10. Amendment v1.1 (10 November 2026, before any experiment)
+
+Reason: `scripts/build_tae_r_corpora.py --mode measure` (commit `3366b3a`)
+showed that 6,564 topic-fitting texts share a title with router_train or
+validation paragraphs, in addition to 7,123 that share a title with evaluation
+files. Under v1 these would stay in the topic-fitting set while the validation
+corpus is searched, so the validation gates would be measured under a weaker
+leakage control than the final run.
+
+Changes (nothing else in v1 changes; no result existed when this was decided):
+
+1. Title matching is Unicode NFC, case-folded and whitespace-collapsed, and a
+   text is excluded if any of its titles matches (v1 used exact titles; the
+   exact count was 7,114, the normalized count is 7,123).
+2. The excluded title set is the union of titles in evaluation files and in
+   router_train and validation contexts: 11,976 texts.
+3. Expected topic-fitting population: 312,555 - 11,976 = 300,579 paragraphs.
+
+Measured values in this section come from the measure run; the build manifest
+records the final figures and corpus hashes.
