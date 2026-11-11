@@ -28,6 +28,15 @@ def fake_encode(texts):
     return np.stack([vector(int(t.split("-")[1]), int(t.split("-")[2]) + 10_000) for t in texts])
 
 
+def gold_ids(i):
+    """Two gold paragraphs from the question's own blob; odd questions add one from the next blob."""
+    c = i % CENTERS
+    texts = [f"retrieval_validation-{c}-{i % 15}", f"retrieval_validation-{c}-{(i + 7) % 15}"]
+    if i % 2:
+        texts.append(f"retrieval_validation-{(c + 1) % CENTERS}-{i % 15}")
+    return [hashlib.sha256(t.encode()).hexdigest() for t in texts]
+
+
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -63,7 +72,8 @@ class FitTests(unittest.TestCase):
             cls.write(name + ".jsonl", records)
         for split, n in (("router_train", 24), ("validation", 12)):
             cls.write(f"questions_{split}.jsonl",
-                      [{"question_id": f"{split}{i}", "question_text": f"q-{i % CENTERS}-{i}"} for i in range(n)])
+                      [{"question_id": f"{split}{i}", "question_text": f"q-{i % CENTERS}-{i}",
+                        "gold_doc_ids": gold_ids(i)} for i in range(n)])
         (cls.corpora / "retrieval_final.jsonl").write_text("not json: must never be read\n")
         (cls.corpora / "questions_final_eval.jsonl").write_text("not json: must never be read\n")
         files = {p.stem: {"file": p.name, "sha256": sha(p)} for p in cls.corpora.glob("*.jsonl")}
