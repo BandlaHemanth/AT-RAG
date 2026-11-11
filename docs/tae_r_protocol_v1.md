@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendment v1.1 in section 10)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -222,4 +222,71 @@ paragraph of the topic-fitting population, final and validation retrieval corpor
 - `document_ids.jsonl`: 38,529,274 bytes; file SHA-256 `af08575835f1db2dd3ac445e1ff47650faab416e796d50558fee093fec9d80ee`; row order equals the input file order (sorted by document_id)
 - Verified: all artifact hashes match the manifest; ids match input order; all values finite; norms 0.9999999 to 1.0000001
 - These embeddings are a new set. They are not mixed with the earlier 396,978-paragraph embeddings, which came from a different software environment.
+
+## 11. Amendment v1.2 (11 November 2026, before any topic model is fitted)
+
+Reason: section 4 left the candidate topic models open. They are fixed here,
+after inspecting the two earlier full models and before fitting any new one.
+
+Evidence from the earlier models (both fitted on the same 396,978 unique
+paragraphs, which include development text; diagnostic only):
+
+| Model | Kaggle dataset | HDBSCAN min cluster / min samples | UMAP seed | Topics | Outliers |
+|---|---|---|---|---:|---:|
+| B (reported in the 6 Nov brief) | at-rag-bertopic-trained-backup | 50 / default (= 50) | none | 19 | 193,646 (48.78%) |
+| A (later fit) | at-rag-full-2wiki-topics | 100 / 10 | 42 | 418 | 189,270 (47.68%) |
+
+Lowering min_samples from 50 to 10 multiplied the topic count about 22-fold
+but moved the outlier share by about 1 point. The models also differ in seed,
+software and corpus file, so this is consistent with, not proof of, outliers
+being driven mainly by the data.
+
+### Candidates (fitted on the 300,579-paragraph topic-fitting population only)
+
+Two different families, kept distinct:
+
+- **HDBSCAN on one shared 5-D UMAP representation.** UMAP: cosine metric,
+  15 neighbours, 5 components, min_dist 0.0, random_state 42; fitted once and
+  shared, so H1 to H3 differ only in clustering. HDBSCAN: Euclidean metric on the
+  5-D output, cluster selection "eom", prediction_data enabled.
+  - H1: min_cluster_size 50, min_samples 50 (Model B settings)
+  - H2: min_cluster_size 100, min_samples 10 (Model A settings)
+  - H3: min_cluster_size 100, min_samples 2 (low density threshold)
+- **Spherical k-means on the original L2-normalised 384-D MiniLM embeddings**
+  (no UMAP; cosine assignment; centroids re-normalised each iteration;
+  k-means++ initialisation; seed 42; no outlier topic).
+  - K1: K = 100
+  - K2: K = 300
+
+Documents of the retrieval corpora and questions receive topics by inference
+only: for H1 to H3, UMAP transform followed by HDBSCAN approximate prediction
+(the operation BERTopic's `transform` performs); for K1 and K2, the most similar
+centroid.
+
+### Strict baseline preserves the original AT-RAG mechanism
+
+As in `models/AT_RAG.py`: the question's topic is the single label returned by
+`transform`, and retrieval is restricted to corpus paragraphs carrying the same
+label, which are also labelled by `transform`. For HDBSCAN candidates this
+includes -1: a question predicted as -1 searches only the paragraphs labelled -1.
+No outlier reassignment and no topic reduction. For k-means the label is the
+nearest centroid.
+
+### Selection rule (validation fold and validation retrieval corpus only)
+
+Measured for every candidate: strict-filter Recall@5 and AllGold@5; oracle topic
+coverage (share of questions whose gold paragraphs all lie in one topic, and
+within the best three topics); retrieval cost (mean share of the corpus that
+the strict filter makes searchable, and similarity computations). Topic count
+and outlier share are reported and never decide the choice.
+
+1. Admissible: the strict filter makes at most 50% of the corpus searchable on
+   average (otherwise it is not filtering in any meaningful sense).
+2. Among admissible candidates, choose the highest strict AllGold@5.
+3. If the best two differ by less than 1 percentage point, use strict Recall@5;
+   if still within 1 point, oracle three-topic coverage; then lower cost.
+
+All candidates' results are reported. final_eval questions and the final
+retrieval corpus are not used in this selection; final_eval questions are not
+embedded or assigned until the final evaluation.
 
