@@ -12,14 +12,23 @@ Per question it records the answer exactly as the original loop reads it
 (pipeline.last_answer), iterations, LLM calls, seconds, errors, and whether the
 answer is identical to the previous question's (possible stale state).
 """
+import os
+import sys
+
+# The old-LangChain environment pins numpy 1.26; the host's TensorFlow/JAX need numpy 2
+# and are not used by AT-RAG. Keep libraries from importing them (umap's optional
+# ParametricUMAP and transformers' backend checks would otherwise try).
+for _env in (("USE_TF", "0"), ("USE_JAX", "0"), ("USE_FLAX", "0"), ("USE_TORCH", "1")):
+    os.environ.setdefault(*_env)
+for _blocked in ("tensorflow", "jax", "jaxlib", "flax", "keras", "tf_keras"):
+    sys.modules.setdefault(_blocked, None)
+
 import argparse
 import contextlib
 import importlib.util
 import json
-import os
 import re
 import string
-import sys
 import tempfile
 import time
 from collections import Counter
