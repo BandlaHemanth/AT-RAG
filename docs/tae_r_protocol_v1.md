@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -400,4 +400,30 @@ with and without the added sentence are reported. It is not used to tune the wor
 The paper used GPT-4o. All end-to-end results here use the free model above. Absolute EM/F1 are not
 comparable with the paper; comparisons between systems are, because every system uses the same model,
 prompts and settings.
+
+## 14. TAE-R design, frozen before its first validation run (12 November 2026)
+
+Implementation: `scripts/tae_r_router.py` at commit `5a6cea3`.
+
+- Probe 1 (no corpus scan): cosine of the question to the centroid of every topic of the selected model
+  (for HDBSCAN models including a centroid of the -1 paragraphs, all from the topic-fitting population).
+  Features: top score, top-minus-second margin, softmax entropy (temperature 0.05), HDBSCAN membership
+  strength and outlier flag of the question, agreement of the top centroid with the predicted label.
+- Probe 2 (one exact unfiltered scan, top m = 20): similarity-weighted topic mass of the 20 paragraphs.
+  Features: share of the top topic and of the top three, distinct topics / 20, share of -1, top similarity,
+  similarity gap rank 1 to 5, mean similarity, agreement with Probe 1 and with the predicted label.
+- Candidate routes: S1 = the top Probe-2 topic; S3 = the top three; unfiltered.
+- Adequacy predictor: two standardised logistic regressions (C = 1), labels "all gold paragraphs lie in
+  S1" and "... in S3", trained on router_train only. Thresholds t1, t3 from the grid 0.30-0.95 (step 0.05)
+  plus "never", chosen on router_train 5-fold out-of-fold predictions (seed 42) to maximise AllGold@5;
+  among configurations within 0.25 points of the best, the lowest searched share is taken.
+  Rule: S1 if P(S1 adequate) >= t1; else S3 if P(S3 adequate) >= t3; else unfiltered.
+- Ablation TAE-R-P1: Probe 1 features only, routes from the centroid ranking; no corpus scan.
+- Cost: TAE-R = one full scan (probe) + centroid scores (final filtered ranking reuses the probe scores);
+  TAE-R-P1 = centroid scores + searched paragraphs; unfiltered = one full scan.
+- Baselines on the same retrieval engine: strict (original mechanism), TAE V1 (-1 falls back to
+  unfiltered), TAE V2 and fixed three (released `scripts/tae_v2_policy.py`, provisional thresholds,
+  H2 soft membership), unfiltered, oracle (gold topics; upper bound).
+- Gate 2 on the validation fold: TAE-R minus unfiltered AllGold@5, paired bootstrap 95% CI (10,000
+  resamples, seed 42), exact McNemar test; decision per section 7.
 
