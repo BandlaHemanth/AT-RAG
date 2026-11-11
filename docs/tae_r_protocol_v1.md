@@ -496,3 +496,20 @@ these exposed questions (answer accuracy is not a criterion):
 
 Reference (7B, same setting): mean iterations 4.40, 14.1 s per question.
 
+### Results backup (12 November 2026, private Kaggle dataset `bandlahemanth/tae-r-results-v1`)
+
+| File | SHA-256 |
+|---|---|
+| tae_r_validation_H2_v1.json | `e65a97f7de9cff8b74abfccd7b3a5900a9858b4abf5455fcdb856dee0bec552c` |
+| tae_r_validation_H2_v1.questions.jsonl | `039f7e7d3b0c49476496e8a7ef07270d076b4314666640a1ae91a88fac1d1a34` |
+| tae_r_validation_K2_v1.json | `9e33d7c8cc19050c00f5d6785c3d0792e6755004f2807ebb98fb4ba12831ad00` |
+| tae_r_validation_K2_v1.questions.jsonl | `89d94f9e603b89f62eae563e3913e7b221936a88c67069836a682966bd190f6a` |
+| tae_r_router_H2_v1.joblib (saved predictor) | `724c287c519027b65fff0cc1a2161c388e9b38e3ee2dd171420dd5fa9f7cfcf3` |
+| tae_r_router_K2_v1.joblib (saved predictor) | `37c30a3ec54b3919a53f8f9f861160adf095d5589cec10539b2eb183c90d0093` |
+| tae_r_validation_H2_rerun.json | `4b72924fe4fab7ed79d8ce86deae04fd31a0fc4f04c1eae1c5b0b3266e71c4b7` |
+| tae_r_validation_K2_rerun.json | `9bbcfe1cb69984b08d1a08b64ad3fd288fd98a2b7588d740c17462c6b0af008f` |
+| smoke_original_at_rag_v1.json | `9633971db176d6e8d083b7c768eeb564c6e188dcc68cdb6b9613c305d97191b7` |
+| smoke_original_at_rag_trace_v1.json | `8e0772df8af5396d251fdaacd0dbfaa3eb0491d94506a87c8f7366898aa573d3` |
+| grader_sanity_released_t0_v1.json | `ff710323b4c25ba39fa40c6702de8ec4fb71d8f334fa05eb6076c026503c8783` |
+| grader_sanity_clarified_t0_v1.json | `8775b7f4159070adb02783852f36e1bbdd44541ce6834960245af84143893ec0` |
+
