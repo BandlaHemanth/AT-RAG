@@ -94,6 +94,26 @@ def count_llm_calls():
     return counter
 
 
+class Recorder:
+    """Pass-through wrapper around a LangChain runnable that records its outputs."""
+
+    def __init__(self, name, runnable, log):
+        self.name, self.runnable, self.log = name, runnable, log
+
+    def invoke(self, *args, **kwargs):
+        out = self.runnable.invoke(*args, **kwargs)
+        self.log.append({"component": self.name, "output": out if isinstance(out, (dict, str)) else repr(out)})
+        return out
+
+    def __getattr__(self, attr):
+        return getattr(self.runnable, attr)
+
+
+def install_recorders(pipeline, log):
+    for name in ("hallucination_grader", "answer_grader", "question_rewriter", "rag_chain"):
+        setattr(pipeline, name, Recorder(name, getattr(pipeline, name), log))
+
+
 @contextlib.contextmanager
 def original_environment(topic_model):
     """Working directory with the relative 'bertopic_model' name the code loads,
@@ -111,7 +131,7 @@ def original_environment(topic_model):
             sys.path[:] = previous_path
 
 
-def run(dataset, topic_model, store, n_questions, server):
+def run(dataset, topic_model, store, n_questions, server, trace=False):
     ingest = load_module("ingest_original", ROOT / "scripts/ingest_original_2wiki_minilm.py")
     dataset, topic_model, store = Path(dataset).resolve(), Path(topic_model).resolve(), Path(store).resolve()
     if not store.exists():
@@ -132,7 +152,11 @@ def run(dataset, topic_model, store, n_questions, server):
         pipeline = at_rag.TopicCoTSelfRAG(max_iter=5, nr_topics=10, max_doc_retrived=5,
                                           dataset_path=str(dataset), vectorDB_path=str(store),
                                           bert_topic_model_path="bertopic_model")
+        trace_log = []
+        if trace:
+            install_recorders(pipeline, trace_log)
         for sample in samples:
+            trace_log.clear()
             question = sample["question_text"]
             topic = int(pipeline.trainer.get_topics_with_probabilities([question])[0][0])
             calls_before, started, error = counter["calls"], time.time(), None
@@ -147,7 +171,8 @@ def run(dataset, topic_model, store, n_questions, server):
                             "answer": answer, "question_topic": topic, "iterations": pipeline.iter,
                             "llm_calls": counter["calls"] - calls_before,
                             "seconds": round(time.time() - started, 1), "error": error,
-                            "exact_match": exact_match(answer, truths), "f1": round(f1_score(answer, truths), 4)})
+                            "exact_match": exact_match(answer, truths), "f1": round(f1_score(answer, truths), 4),
+                            "trace": list(trace_log) if trace else None})
     flags = stale_flags([r["answer"] for r in records], [r["error"] for r in records])
     for record, flag in zip(records, flags):
         record["suspect_stale_or_error"] = flag
@@ -172,8 +197,9 @@ def main(argv=None):
     parser.add_argument("--questions", type=int, default=5)
     parser.add_argument("--server", default="http://127.0.0.1:11434/v1")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--trace-graders", action="store_true", help="record grader/rewriter/generator outputs (observation only)")
     args = parser.parse_args(argv)
-    report = run(args.dataset, args.topic_model, args.store, args.questions, args.server)
+    report = run(args.dataset, args.topic_model, args.store, args.questions, args.server, args.trace_graders)
     with args.output.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
     print(json.dumps(report["summary"], indent=1))

@@ -24,5 +24,22 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(smoke.gold_answers({}), [""])
 
 
+
+class RecorderTests(unittest.TestCase):
+    def test_recorder_passes_through_and_logs(self):
+        class Fake:
+            def invoke(self, x):
+                return {"score": "Yes"}
+            extra = 7
+        log = []
+        holder = type("P", (), {})()
+        for name in ("hallucination_grader", "answer_grader", "question_rewriter", "rag_chain"):
+            setattr(holder, name, Fake())
+        smoke.install_recorders(holder, log)
+        self.assertEqual(holder.answer_grader.invoke({"q": 1}), {"score": "Yes"})
+        self.assertEqual(holder.answer_grader.extra, 7)
+        self.assertEqual(log, [{"component": "answer_grader", "output": {"score": "Yes"}}])
+
+
 if __name__ == "__main__":
     unittest.main()
