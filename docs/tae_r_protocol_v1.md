@@ -361,3 +361,9 @@ headroom.
   measurement, and the same statistics.
 - Retrieval-only. End-to-end LLM runs use H2 only.
 
+### Backup record (11 November 2026)
+
+- Selection report `tae_r_topic_selection_validation_v1.json`: 6,270 bytes, SHA-256 `814e2f85c98cfabae123b67ccaa80e3e7e817d03e52af08398e988c278c677fd`
+- All fitted artifacts (shared UMAP model 1,627.8 MiB; H1-H3 HDBSCAN models; K1-K2 centroids; validation assignments; question embeddings): private Kaggle dataset `bandlahemanth/tae-r-topics-v1`, uploaded directly from the notebook; all 12 stage manifests and the report re-verified by SHA-256 from the dataset copy.
+- Earlier artifacts: `tae-r-frozen-artifacts-v1` (splits, corpora) and `tae-r-embeddings-v1` (embeddings), both verified.
+
