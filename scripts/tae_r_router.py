@@ -234,7 +234,7 @@ def out_of_fold(x, y):
     return probs
 
 
-def summarise(rows, choice, n_docs, extra_cost):
+def summarise(rows, choice, n_docs, extra_cost, reuses_scan=False):
     n = len(rows)
     gold_total = sum(r["n_gold"] for r in rows)
     out = {"questions": n}
@@ -243,7 +243,8 @@ def summarise(rows, choice, n_docs, extra_cost):
         out[f"allgold@{k}"] = sum(r["outcomes"][c][f"all@{k}"] for r, c in zip(rows, choice)) / n
     searched = sum(r["outcomes"][c]["searched"] for r, c in zip(rows, choice)) / n
     out["mean_searched_share"] = searched / n_docs
-    out["mean_similarity_computations"] = searched + extra_cost
+    # A method whose probe already scanned the whole corpus ranks the filtered set from those scores.
+    out["mean_similarity_computations"] = extra_cost if reuses_scan else searched + extra_cost
     out["route_counts"] = {c: choice.count(c) for c in sorted(set(choice))}
     return out
 
@@ -313,7 +314,7 @@ def run(corpora_dir, embeddings_dir, topics_dir, name, *, frozen=fit.FROZEN, log
         choices[variant] = [single if c == "S1" else multi if c == "S3" else "unfiltered" for c in routes]
         th["router_train_base_rates"] = {single: float(y1.mean()), multi: float(y3.mean())}
         report["thresholds"][variant] = th
-        report["methods"][variant] = summarise(val, choices[variant], n_docs, extra)
+        report["methods"][variant] = summarise(val, choices[variant], n_docs, extra, reuses_scan=(variant == "tae_r"))
         log(f"{variant}: thresholds {th['t1']}/{th['t3']}, validation AllGold@5 {report['methods'][variant]['allgold@5']:.4f}")
     baselines = ["unfiltered", "strict", "tae_v1", "oracle"] + (["tae_v2", "fixed_three"] if cand["hdbscan"] else [])
     for method in baselines:

@@ -81,6 +81,9 @@ class IntegrationTest(unittest.TestCase):
                 self.assertEqual(sum(summary["route_counts"].values()), 12)
                 self.assertLessEqual(summary["mean_searched_share"], 1.0)
             self.assertEqual(report["methods"]["unfiltered"]["mean_searched_share"], 1.0)
+            n_docs, n_cent = report["validation_documents"], report["topic_centroids"]
+            self.assertEqual(report["methods"]["tae_r"]["mean_similarity_computations"], n_docs + n_cent)
+            self.assertEqual(report["methods"]["unfiltered"]["mean_similarity_computations"], n_docs)
             self.assertIn("tae_r", report["gate2"])
             low, high = report["gate2"]["tae_r"]["ci95"]
             self.assertLessEqual(low, high)

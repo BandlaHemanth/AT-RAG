@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -426,4 +426,57 @@ Implementation: `scripts/tae_r_router.py` at commit `5a6cea3`.
   H2 soft membership), unfiltered, oracle (gold topics; upper bound).
 - Gate 2 on the validation fold: TAE-R minus unfiltered AllGold@5, paired bootstrap 95% CI (10,000
   resamples, seed 42), exact McNemar test; decision per section 7.
+
+## 15. TAE-R validation results and Gate 2 (12 November 2026)
+
+Run: `scripts/tae_r_router.py` at commit `b34cdee` (design of section 14), validation fold 4,576
+questions, validation retrieval corpus 56,655 paragraphs, MiniLM exact search. Predictor trained and
+thresholds chosen on router_train (8,000) only.
+
+### H2 (primary)
+
+| Method | AllGold@5 | Recall@5 | AllGold@10 | Searched share | Similarity computations* | Routes |
+|---|---:|---:|---:|---:|---:|---|
+| Unfiltered | 16.28% | 48.54% | 20.39% | 1.000 | 56,655 | all unfiltered |
+| TAE-R | 16.17% | 48.41% | 20.17% | 0.922 | 56,971 | S1 53, S3 769, unfiltered 3,754 |
+| TAE-R-P1 | 16.13% | 48.04% | 20.19% | 0.975 | 55,535 | S1 212, S3 31, unfiltered 4,333 |
+| TAE V2 | 13.51% | 43.46% | 16.98% | 0.804 | 45,524 | |
+| TAE V1 | 11.10% | 39.78% | 13.96% | 0.681 | 38,600 | |
+| Fixed three | 6.38% | 32.64% | 7.93% | 0.386 | 21,861 | |
+| Strict (original) | 5.22% | 31.01% | 6.53% | 0.383 | 21,686 | |
+| Oracle (upper bound) | 19.93% | 51.67% | 24.83% | 0.468 | 26,517 | |
+
+Thresholds: TAE-R t1 = 0.75, t3 = 0.80 (router_train base rates: S1 adequate 32.95%, S3 66.58%);
+TAE-R-P1 t1 = 0.40, t3 = 0.35.
+
+\* Correction: the first report counted TAE-R's searched paragraphs on top of its probe scan
+(109,205). Per the frozen design the filtered ranking reuses the probe scores, so the cost is one scan
+plus 316 centroid scores = 56,971. Fixed in the script and covered by a test; retrieval results are
+unaffected.
+
+Gate 2 (AllGold@5 minus unfiltered, paired bootstrap 95% CI, exact McNemar):
+
+| Method | Difference | 95% CI | Helps / hurts | p | Decision |
+|---|---:|---|---|---:|---|
+| TAE-R | -0.11 pt | [-0.22, 0.00] | 1 / 6 | 0.125 | **equivalent** |
+| TAE-R-P1 | -0.15 pt | [-0.28, -0.02] | 1 / 8 | 0.039 | equivalent (within the 1-point margin) |
+| TAE V2 | -2.78 pt | [-3.26, -2.29] | 2 / 129 | <0.001 | worse |
+| Strict | -11.06 pt | [-12.02, -10.10] | 32 / 538 | <0.001 | worse |
+| Oracle | +3.65 pt | [+3.10, +4.20] | 167 / 0 | <0.001 | better |
+
+**Gate 2 outcome: TAE-R is equivalent to unfiltered retrieval.** No efficiency claim (its cost is one
+full scan plus centroid scores, about 0.6% above unfiltered; TAE-R-P1 saves about 2% at -0.15 points).
+
+### K2 (secondary, same conditions)
+
+Unfiltered 16.28%; TAE-R 16.06% (-0.22 pt, CI [-0.37, -0.09], 1 / 11, equivalent); TAE-R-P1 16.02%
+(equivalent); strict 1.73% (-14.55 pt, worse); TAE V1 = strict for k-means; oracle 25.31% (+9.03 pt,
+searched share 0.013). TAE-R thresholds 0.65 / 0.65; routes S1 19, S3 317, unfiltered 4,240.
+
+### Interpretation recorded before the final run
+
+The strict single-topic filter loses most complete-evidence questions; TAE-R recovers that loss and
+matches unfiltered search, mainly by declining to filter (82% unfiltered on H2). The oracle shows a
+filtering gain of +3.65 (H2) and +9.03 (K2) points that the probe features do not predict reliably;
+this gap is reported as the main open problem.
 
