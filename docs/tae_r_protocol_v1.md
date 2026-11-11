@@ -221,7 +221,7 @@ paragraph of the topic-fitting population, final and validation retrieval corpor
 - `embeddings.npy` (402,504 x 384): 618,246,272 bytes; file SHA-256 `19c5b4d6cb3bf0773f848a0a490f8787d8af8025ef616f5c6a074df0c0abd809` (checked on the laptop copy); embedding data SHA-256 `31f4ca2c70384577d18d11da3b7f8f92943d5c468516888ad1f401c1a56eab6d`
 - `document_ids.jsonl`: 38,529,274 bytes; file SHA-256 `af08575835f1db2dd3ac445e1ff47650faab416e796d50558fee093fec9d80ee`; row order equals the input file order (sorted by document_id)
 - Verified: all artifact hashes match the manifest; ids match input order; all values finite; norms 0.9999999 to 1.0000001
-- These embeddings are a new set. They are not mixed with the earlier 396,978-paragraph embeddings, which came from a different software environment.
+- These embeddings are a new set. They are not mixed with the earlier 396,978-paragraph embeddings. (Correction, 11 November: those were made with the same library versions, but with batch size 64 and over a different corpus file; the earlier statement that they came from a different software environment was wrong.)
 
 ## 11. Amendment v1.2 (11 November 2026, before any topic model is fitted)
 
