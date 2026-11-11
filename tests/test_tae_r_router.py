@@ -91,7 +91,19 @@ class IntegrationTest(unittest.TestCase):
                 self.assertIn("tae_v2", report["methods"])
             else:
                 self.assertNotIn("tae_v2", report["methods"])
-            json.dumps(report)
+            json.dumps({k: v for k, v in report.items() if k != "router_model"})
+
+    def test_saved_model_reproduces_validation_routes(self):
+        for name in ("H1", "K1"):
+            report, rows, choices = self.run_candidate(name)
+            val = [r for r in rows if r["split"] == "validation"]
+            for variant, model in report["router_model"]["variants"].items():
+                for r, chosen in zip(val, choices[variant]):
+                    route, topics = router.route_tae_r(r["features"],
+                                                       r["routes"]["P1_S3"], r["routes"]["S3"], model)
+                    self.assertEqual(route, chosen, (name, variant))
+                    if topics is not None:
+                        self.assertEqual(topics, r["routes"][route])
 
     def test_deterministic(self):
         a, b = self.run_candidate("K1")[0], self.run_candidate("K1")[0]

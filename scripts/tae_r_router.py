@@ -140,6 +140,51 @@ def v2_inference(label, strength, membership_row):
             "topic_memberships": entries or [{"topic_id": 0, "membership": 0.0}], "membership_sum": total}
 
 
+def compute_features(q, label, strength, scores, order, doc_labels, centroid_ids, centroids, hdbscan_model):
+    """Label-free TAE-R features for one question (shared by validation and end-to-end runs).
+
+    scores/order: exact cosine scores of the question against the searched corpus and their
+    descending order. Returns (features, Probe-1 topic ranking, Probe-2 topic ranking)."""
+    # Probe 1: centroid scores (no corpus scan).
+    c_scores = centroids @ q
+    c_rank = np.argsort(-c_scores, kind="stable")
+    p1_topics = centroid_ids[c_rank].tolist()
+    top1, top2 = float(c_scores[c_rank[0]]), float(c_scores[c_rank[1]]) if len(c_rank) > 1 else 0.0
+    # Probe 2: exact unfiltered top-m probe and its topic mass.
+    probe = order[:PROBE_M]
+    probe_labels = doc_labels[probe]
+    ranked_mass = topic_mass(probe_labels, scores[probe])
+    total_mass = sum(m for _, m in ranked_mass) or 1.0
+    p2_topics = [t for t, _ in ranked_mass]
+    features = {
+        "p1_top": top1, "p1_margin": top1 - top2, "p1_entropy": softmax_entropy(c_scores),
+        "hdb_strength": strength if hdbscan_model else 0.0,
+        "hdb_outlier": float(label == -1) if hdbscan_model else 0.0,
+        "p1_agrees_label": float(p1_topics[0] == label),
+        "p2_top_share": ranked_mass[0][1] / total_mass,
+        "p2_top3_share": sum(m for _, m in ranked_mass[:3]) / total_mass,
+        "p2_distinct": len(ranked_mass) / PROBE_M,
+        "p2_outlier_share": float((probe_labels == -1).mean()),
+        "p2_sim1": float(scores[probe[0]]), "p2_sim_gap": float(scores[probe[0]] - scores[probe[4]]),
+        "p2_sim_mean": float(scores[probe].mean()),
+        "p2_agrees_p1": float(p2_topics[0] == p1_topics[0]),
+        "p2_agrees_label": float(p2_topics[0] == label),
+    }
+    return features, p1_topics, p2_topics
+
+
+def route_tae_r(features, p1_topics, p2_topics, variant_model):
+    """Apply a saved TAE-R variant: returns (route name, topic list or None for unfiltered)."""
+    x = np.array([[features[n] for n in variant_model["features"]]], dtype=np.float64)
+    prob = lambda m: (float(m.predict_proba(x)[0, 1]) if hasattr(m, "predict_proba") else float(m))
+    topics = p2_topics if variant_model["single"] == "S1" else p1_topics
+    if prob(variant_model["model_single"]) >= variant_model["t1"]:
+        return variant_model["single"], topics[:1]
+    if prob(variant_model["model_multi"]) >= variant_model["t3"]:
+        return variant_model["multi"], topics[:3]
+    return "unfiltered", None
+
+
 def question_rows(cand, inputs):
     """Features and route outcomes for every router_train and validation question."""
     doc_index = {doc: i for i, doc in enumerate(inputs["val_ids"])}
@@ -151,31 +196,8 @@ def question_rows(cand, inputs):
         scores, ranking = retriever.rank(q)
         order = ranking[0]
         label, strength = int(cand["q_labels"][qi]), float(cand["q_strengths"][qi])
-        # Probe 1: centroid scores (no corpus scan).
-        c_scores = cand["centroids"] @ q
-        c_rank = np.argsort(-c_scores, kind="stable")
-        p1_topics = cand["centroid_ids"][c_rank].tolist()
-        top1, top2 = float(c_scores[c_rank[0]]), float(c_scores[c_rank[1]]) if len(c_rank) > 1 else 0.0
-        # Probe 2: exact unfiltered top-m probe and its topic mass.
-        probe = order[:PROBE_M]
-        ranked_mass = topic_mass(cand["doc_labels"][probe], scores[probe])
-        total_mass = sum(m for _, m in ranked_mass) or 1.0
-        p2_topics = [t for t, _ in ranked_mass]
-        probe_labels = cand["doc_labels"][probe]
-        features = {
-            "p1_top": top1, "p1_margin": top1 - top2, "p1_entropy": softmax_entropy(c_scores),
-            "hdb_strength": strength if cand["hdbscan"] else 0.0,
-            "hdb_outlier": float(label == -1) if cand["hdbscan"] else 0.0,
-            "p1_agrees_label": float(p1_topics[0] == label),
-            "p2_top_share": ranked_mass[0][1] / total_mass,
-            "p2_top3_share": sum(m for _, m in ranked_mass[:3]) / total_mass,
-            "p2_distinct": len(ranked_mass) / PROBE_M,
-            "p2_outlier_share": float((probe_labels == -1).mean()),
-            "p2_sim1": float(scores[probe[0]]), "p2_sim_gap": float(scores[probe[0]] - scores[probe[4]]),
-            "p2_sim_mean": float(scores[probe].mean()),
-            "p2_agrees_p1": float(p2_topics[0] == p1_topics[0]),
-            "p2_agrees_label": float(p2_topics[0] == label),
-        }
+        features, p1_topics, p2_topics = compute_features(q, label, strength, scores, order, cand["doc_labels"],
+                                                          cand["centroid_ids"], cand["centroids"], cand["hdbscan"])
         gold_topics = sorted(set(cand["doc_labels"][gold].tolist()))
         routes = {
             "unfiltered": None, "strict": [label], "oracle": gold_topics,
@@ -217,10 +239,17 @@ def matrix(rows, names):
     return np.array([[r["features"][n] for n in names] for r in rows], dtype=np.float64)
 
 
-def predict_proba(x_train, y_train, x_test):
-    if len(set(y_train.tolist())) < 2:  # degenerate fold: constant prediction
-        return np.full(len(x_test), float(y_train.mean()))
-    model = make_classifier().fit(x_train, y_train)
+def fit_model(x_train, y_train):
+    """A fitted classifier, or a constant probability when the labels are degenerate."""
+    if len(set(y_train.tolist())) < 2:
+        return float(y_train.mean())
+    return make_classifier().fit(x_train, y_train)
+
+
+def predict_proba(x_train, y_train, x_test, model=None):
+    model = fit_model(x_train, y_train) if model is None else model
+    if not hasattr(model, "predict_proba"):
+        return np.full(len(x_test), model)
     return model.predict_proba(x_test)[:, 1]
 
 
@@ -302,14 +331,17 @@ def run(corpora_dir, embeddings_dir, topics_dir, name, *, frozen=fit.FROZEN, log
     }
     report = {"protocol": fit.PROTOCOL, "candidate": name, "validation_documents": n_docs,
               "topic_centroids": n_centroids, "probe_m": PROBE_M, "methods": {}, "thresholds": {}, "gate2": {}}
-    choices = {}
+    choices, saved = {}, {}
     for variant, (features, single, multi, extra) in variants.items():
         x_tr, x_va = matrix(train, features), matrix(val, features)
         y1 = np.array([r[f"adequate_{single}"] for r in train])
         y3 = np.array([r[f"adequate_{multi}"] for r in train])
         oof1, oof3 = out_of_fold(x_tr, y1), out_of_fold(x_tr, y3)
         th = choose_thresholds(train, oof1, oof3, single, multi, n_docs)
-        p1, p3 = predict_proba(x_tr, y1, x_va), predict_proba(x_tr, y3, x_va)
+        m1, m3 = fit_model(x_tr, y1), fit_model(x_tr, y3)
+        p1, p3 = predict_proba(x_tr, y1, x_va, m1), predict_proba(x_tr, y3, x_va, m3)
+        saved[variant] = {"features": list(features), "single": single, "multi": multi,
+                          "model_single": m1, "model_multi": m3, "t1": th["t1"], "t3": th["t3"]}
         routes = ["S1" if a >= th["t1"] else ("S3" if b >= th["t3"] else "unfiltered") for a, b in zip(p1, p3)]
         choices[variant] = [single if c == "S1" else multi if c == "S3" else "unfiltered" for c in routes]
         th["router_train_base_rates"] = {single: float(y1.mean()), multi: float(y3.mean())}
@@ -330,6 +362,7 @@ def run(corpora_dir, embeddings_dir, topics_dir, name, *, frozen=fit.FROZEN, log
     report["per_question_sha256"] = hashlib.sha256(json.dumps(
         [[r["question_id"], {m: r["outcomes"][c] for m, c in ((m, choices[m][i]) for m in choices)}]
          for i, r in enumerate(val)], sort_keys=True).encode()).hexdigest()
+    report["router_model"] = {"candidate": name, "variants": saved}
     return report, rows, choices
 
 
@@ -340,11 +373,17 @@ def main(argv=None):
     parser.add_argument("--topics-dir", type=Path, required=True)
     parser.add_argument("--candidate", default="H2")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--save-model", type=Path, help="write the fitted TAE-R predictors and thresholds (joblib)")
     args = parser.parse_args(argv)
     try:
         report, rows, choices = run(args.corpora_dir, args.embeddings_dir, args.topics_dir, args.candidate)
+        model = report.pop("router_model")
         with args.output.open("x", encoding="utf-8") as stream:
             stream.write(json.dumps(report, indent=1, sort_keys=True) + "\n")
+        if args.save_model:
+            import joblib
+            import sklearn
+            joblib.dump(dict(model, sklearn=sklearn.__version__, protocol=fit.PROTOCOL), args.save_model)
         detail = args.output.with_suffix(".questions.jsonl")
         with detail.open("x", encoding="utf-8") as stream:
             val = [r for r in rows if r["split"] == "validation"]
