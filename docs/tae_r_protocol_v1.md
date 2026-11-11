@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -289,4 +289,75 @@ and outlier share are reported and never decide the choice.
 All candidates' results are reported. final_eval questions and the final
 retrieval corpus are not used in this selection; final_eval questions are not
 embedded or assigned until the final evaluation.
+
+## 12. Topic-model selection, Gate 1 and secondary analysis (11 November 2026)
+
+Fitted by `scripts/fit_tae_r_topic_models.py` (commit `67d0202`; stages run at
+`b04f100`) and evaluated by `scripts/evaluate_tae_r_topic_candidates.py`
+(commit `b04f100`) on the validation fold (4,576 questions) and the validation
+retrieval corpus (56,655 paragraphs) only. No final_eval question and no final
+corpus paragraph was read.
+
+### Fitting (topic-fitting population, 300,579 paragraphs)
+
+Shared UMAP: 548.2 s, peak RSS 5,869 MiB.
+
+| Candidate | Topics | Fit outliers | Validation-corpus outliers | Validation-question outliers |
+|---|---:|---:|---:|---:|
+| H1 | 394 | 45.03% | 47.09% | 58.26% |
+| H2 | 315 | 51.38% | 56.07% | 67.61% |
+| H3 | 371 | 49.87% | 57.13% | 66.90% |
+| K1 | 100 | 0% | 0% | 0% |
+| K2 | 300 | 0% | 0% | 0% |
+
+### Validation retrieval (exact cosine search, MiniLM)
+
+Unfiltered: AllGold@5 16.28%, Recall@5 48.54%, AllGold@10 20.41%, Recall@10 52.50%.
+
+| Candidate | Strict AllGold@5 | Strict Recall@5 | Strict eligibility | Strict searched share | Oracle AllGold@5 | Oracle searched share | One-topic coverage | Three-topic coverage | Gold outlier share |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| H1 | 4.70% | 27.95% | 44.95% | 0.283 | 20.39% | 0.348 | 32.28% | 96.77% | 0.456 |
+| H2 | 5.22% | 31.01% | 52.97% | 0.383 | 19.93% | 0.468 | 36.54% | 97.64% | 0.590 |
+| H3 | 6.03% | 30.74% | 51.32% | 0.387 | 19.84% | 0.472 | 35.36% | 96.88% | 0.573 |
+| K1 | 3.12% | 16.44% | 25.44% | 0.019 | 22.47% | 0.038 | 16.22% | 91.67% | 0 |
+| K2 | 1.73% | 13.76% | 18.27% | 0.005 | 25.31% | 0.013 | 8.76% | 84.24% | 0 |
+
+### Selection (rule of section 11, applied mechanically)
+
+1. Admissible (strict searched share <= 0.50): all five.
+2. Strict AllGold@5: best H3 6.03% (276/4,576); H2 5.22% (239/4,576) is within
+   1 point (gap 0.81); H1 (gap 1.33), K1 and K2 drop out.
+3. Strict Recall@5: H2 31.01%, H3 30.74%; gap 0.27, tie.
+4. Oracle three-topic coverage: H2 97.64%, H3 96.88%; gap 0.76, tie.
+5. Lower strict searched share: H2 0.383 < H3 0.387.
+
+**Selected primary topic model: H2.** H3 was numerically higher on strict
+AllGold@5 by 37 questions, inside the pre-set 1-point margin; H2 and H3 are
+treated as practically equivalent.
+
+### Gate 1 (section 7)
+
+Cross-topic rate with H2 = 1 - one-topic coverage = **63.46%** of validation
+questions (label -1 counted as a topic, as in the original mechanism). This is
+at least 20%, so **multi-topic routing is a main contribution**. With k-means
+(no outlier label) the rate is 83.78% (K1) and 91.24% (K2), so the outcome does
+not depend on outlier handling.
+
+### Secondary analysis declared before TAE-R is implemented: K2 topics
+
+Motivation (validation-based, stated openly): the oracle on K2 topics reaches
+25.31% AllGold@5 while searching 1.3% of the corpus, versus 19.93% at 46.8% for
+H2; the selection rule optimises the strict baseline and does not measure this
+headroom.
+
+- Primary results remain H2 for every system and are reported first; K2 never
+  replaces them.
+- Secondary: TAE-R built with K2 topics, compared with strict-K2, unfiltered,
+  TAE V1/TAE V2-style baselines where applicable to K2, and the K2 oracle.
+- Identical conditions to the primary comparison: same splits (router_train for
+  training, validation for tuning, final_eval once), same retrieval corpora,
+  embeddings, exact search, k = 5 and 10, same TAE-R design and training
+  procedure (labels recomputed for K2 topics), same probe budget and cost
+  measurement, and the same statistics.
+- Retrieval-only. End-to-end LLM runs use H2 only.
 
