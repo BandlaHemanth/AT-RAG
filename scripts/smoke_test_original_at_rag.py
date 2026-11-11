@@ -114,6 +114,30 @@ def install_recorders(pipeline, log):
         setattr(pipeline, name, Recorder(name, getattr(pipeline, name), log))
 
 
+CLARIFICATIONS = {  # protocol v1.3, section 13; wording fixed in advance
+    "hallucination_grader": "Give 'yes' if the answer is supported by the facts, and 'no' if it is not.",
+    "answer_grader": "Give 'yes' if the answer resolves the question, and 'no' if it does not.",
+}
+ANCHOR = "Please respond in valid JSON format"
+
+
+def clarified_template(template, sentence):
+    """Insert the sentence immediately before the JSON instruction; the rest stays verbatim."""
+    if template.count(ANCHOR) != 1:
+        raise ValueError("released template does not contain the JSON instruction exactly once")
+    return template.replace(ANCHOR, sentence + " " + ANCHOR, 1)
+
+
+def install_clarified_graders(pipeline):
+    from langchain_core.prompts import PromptTemplate
+    for name, sentence in CLARIFICATIONS.items():
+        chain = getattr(pipeline, name)
+        old = chain.first
+        prompt = PromptTemplate(template=clarified_template(old.template, sentence),
+                                input_variables=old.input_variables, partial_variables=old.partial_variables)
+        setattr(pipeline, name, prompt | pipeline.llm | chain.last)
+
+
 @contextlib.contextmanager
 def original_environment(topic_model):
     """Working directory with the relative 'bertopic_model' name the code loads,
@@ -131,7 +155,7 @@ def original_environment(topic_model):
             sys.path[:] = previous_path
 
 
-def run(dataset, topic_model, store, n_questions, server, trace=False):
+def run(dataset, topic_model, store, n_questions, server, trace=False, temperature=None, clarified=False):
     ingest = load_module("ingest_original", ROOT / "scripts/ingest_original_2wiki_minilm.py")
     dataset, topic_model, store = Path(dataset).resolve(), Path(topic_model).resolve(), Path(store).resolve()
     if not store.exists():
@@ -152,6 +176,10 @@ def run(dataset, topic_model, store, n_questions, server, trace=False):
         pipeline = at_rag.TopicCoTSelfRAG(max_iter=5, nr_topics=10, max_doc_retrived=5,
                                           dataset_path=str(dataset), vectorDB_path=str(store),
                                           bert_topic_model_path="bertopic_model")
+        if temperature is not None:
+            pipeline.llm.temperature = temperature
+        if clarified:
+            install_clarified_graders(pipeline)
         trace_log = []
         if trace:
             install_recorders(pipeline, trace_log)
@@ -186,6 +214,7 @@ def run(dataset, topic_model, store, n_questions, server, trace=False):
                "f1": sum(r["f1"] for r in records) / n,
                "question_topic_minus_one": sum(r["question_topic"] == -1 for r in records)}
     return {"setting": "faithful reproduction smoke test; LLM substituted via local OpenAI-compatible server",
+            "temperature": pipeline.llm.temperature, "clarified_graders": clarified,
             "server": server, "store": build, "summary": summary, "records": records}
 
 
@@ -198,8 +227,11 @@ def main(argv=None):
     parser.add_argument("--server", default="http://127.0.0.1:11434/v1")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--trace-graders", action="store_true", help="record grader/rewriter/generator outputs (observation only)")
+    parser.add_argument("--temperature", type=float, default=None, help="override the released default (0.7)")
+    parser.add_argument("--clarified-graders", action="store_true", help="protocol v1.3 grader sentences (sanity check)")
     args = parser.parse_args(argv)
-    report = run(args.dataset, args.topic_model, args.store, args.questions, args.server, args.trace_graders)
+    report = run(args.dataset, args.topic_model, args.store, args.questions, args.server, args.trace_graders,
+                 args.temperature, args.clarified_graders)
     with args.output.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
     print(json.dumps(report["summary"], indent=1))

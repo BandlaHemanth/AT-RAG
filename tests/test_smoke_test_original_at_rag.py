@@ -25,6 +25,16 @@ class HelperTests(unittest.TestCase):
 
 
 
+class ClarifiedTemplateTests(unittest.TestCase):
+    def test_sentence_inserted_once_before_json_instruction(self):
+        released = "Here is the answer: {generation} \n\n            Please respond in valid JSON format using x \n {format_instructions}"
+        out = smoke.clarified_template(released, smoke.CLARIFICATIONS["hallucination_grader"])
+        self.assertIn("is not. Please respond in valid JSON format using x", out)
+        self.assertEqual(out.replace(smoke.CLARIFICATIONS["hallucination_grader"] + " ", ""), released)
+        with self.assertRaises(ValueError):
+            smoke.clarified_template("no anchor here", "s")
+
+
 class RecorderTests(unittest.TestCase):
     def test_recorder_passes_through_and_logs(self):
         class Fake:
