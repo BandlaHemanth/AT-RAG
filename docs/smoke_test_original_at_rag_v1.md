@@ -44,3 +44,17 @@ Every question reached the iteration cap, including the one answered correctly; 
 answer regenerated repeatedly, i.e. the hallucination/answer graders did not return "yes".
 Hypothesis, not yet verified: the released code compares `score == "yes"` exactly, and the substituted
 model may answer "Yes". Next: a diagnostic run recording the graders' raw outputs.
+
+## Diagnostic run (same 5 questions, `--trace-graders`, commit `4d45a9b`)
+
+Grader outputs were recorded without changing behaviour. The case hypothesis is rejected: the graders
+answer in lowercase. The hallucination grader returned "no" in 21 of 22 calls, including for the
+correctly answered question (answer "The Devil's Miner"), so `grade_generation` returned
+"not supported" and the graph regenerated with the same documents until the iteration cap.
+The only "yes" led to the answer grader, which returned "no" (question rewritten, then capped).
+
+Cause (from the released prompts): the hallucination and answer grader prompts ask for
+"a score 'yes' or 'no'" but never state which value means grounded / useful. A strong model may infer
+it; the 7B substitute mostly answers "no". With this model the released loop therefore behaves as
+"regenerate up to the cap and keep the last answer", at about 12 LLM calls per question.
+Mean over the diagnostic run: 5.2 iterations, 11.6 LLM calls, 13.6 s per question, EM 0.20.
