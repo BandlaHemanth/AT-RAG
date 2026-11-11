@@ -58,3 +58,19 @@ Cause (from the released prompts): the hallucination and answer grader prompts a
 it; the 7B substitute mostly answers "no". With this model the released loop therefore behaves as
 "regenerate up to the cap and keep the last answer", at about 12 LLM calls per question.
 Mean over the diagnostic run: 5.2 iterations, 11.6 LLM calls, 13.6 s per question, EM 0.20.
+
+## Grader sanity check (protocol v1.3, section 13), commit `169c2d2`
+
+Original code and store, first 20 exposed questions of `test_subsampled.jsonl`, temperature 0 for both
+runs, graders traced. Released wording vs the fixed clarified wording (not tuned afterwards):
+
+| Wording | EM | F1 | Mean iterations | Mean LLM calls | Mean s | Errors | Hallucination grader "yes" | Answer grader "yes" |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Released | 0.25 | 0.30 | 4.65 | 10.6 | 15.3 | 1 | 7 / 88 | 1 / 6 |
+| Clarified | 0.20 | 0.27 | 4.40 | 10.2 | 14.1 | 2 | 8 / 82 | 1 / 7 |
+
+The added sentence did not change grader behaviour: the substitute model judges most answers
+unsupported, including correct ones, so the near-constant "no" is a capability limitation of the
+7B model rather than an effect of the ambiguous wording. Per v1.3 the wording stays fixed. All three
+controlled systems share the same graders, so the comparison remains fair; most questions will run
+4-5 iterations (about 10 LLM calls). Reported as a limitation of the free-LLM substitution.
