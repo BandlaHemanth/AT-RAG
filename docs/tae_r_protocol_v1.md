@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15; LLM choice rule in section 16)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -479,4 +479,20 @@ The strict single-topic filter loses most complete-evidence questions; TAE-R rec
 matches unfiltered search, mainly by declining to filter (82% unfiltered on H2). The oracle shows a
 filtering gain of +3.65 (H2) and +9.03 (K2) points that the probe features do not predict reliably;
 this gap is reported as the main open problem.
+
+## 16. Pre-declared LLM choice test (12 November 2026, before any controlled end-to-end run)
+
+The fitted TAE-R predictors were saved (`--save-model`, commit `caf5d90`); rerunning reproduced the
+section 15 per-question results and thresholds exactly for H2 and K2.
+
+Because the 7B substitute grades poorly (section 13 sanity check), one larger free model is tested on
+the same 20 exposed questions, original code and store, temperature 0, clarified graders:
+`qwen2.5:14b-instruct-q4_K_M` (Ollama). Decision rule, fixed before the test and judged only on
+these exposed questions (answer accuracy is not a criterion):
+
+- switch the controlled comparison's LLM to the 14B model if its mean iterations are below 3.5 **and**
+  its mean seconds per question are at most 30;
+- otherwise keep `qwen2.5:7b-instruct-q8_0`.
+
+Reference (7B, same setting): mean iterations 4.40, 14.1 s per question.
 
