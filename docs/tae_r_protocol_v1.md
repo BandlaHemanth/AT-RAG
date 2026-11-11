@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -366,4 +366,38 @@ headroom.
 - Selection report `tae_r_topic_selection_validation_v1.json`: 6,270 bytes, SHA-256 `814e2f85c98cfabae123b67ccaa80e3e7e817d03e52af08398e988c278c677fd`
 - All fitted artifacts (shared UMAP model 1,627.8 MiB; H1-H3 HDBSCAN models; K1-K2 centroids; validation assignments; question embeddings): private Kaggle dataset `bandlahemanth/tae-r-topics-v1`, uploaded directly from the notebook; all 12 stage manifests and the report re-verified by SHA-256 from the dataset copy.
 - Earlier artifacts: `tae-r-frozen-artifacts-v1` (splits, corpora) and `tae-r-embeddings-v1` (embeddings), both verified.
+
+## 13. Amendment v1.3 (12 November 2026, before any controlled end-to-end run)
+
+Reason: the faithful smoke test (`docs/smoke_test_original_at_rag_v1.md`) showed that the released
+hallucination and answer grader prompts ask for "a score 'yes' or 'no'" without saying which value means
+grounded or useful. With the free substitute LLM the hallucination grader answered "no" in 21 of 22
+calls, so every question looped to the iteration cap and LLM-cost comparisons would carry no information.
+
+### Faithful reproduction (unchanged)
+
+Released code and prompts, released default temperature (0.7), LLM substitution only. The grader
+behaviour above is reported as a finding.
+
+### Controlled comparison (all three systems identically)
+
+The released prompts are kept verbatim except for one added sentence each, placed immediately before
+"Please respond in valid JSON format":
+
+- hallucination grader: "Give 'yes' if the answer is supported by the facts, and 'no' if it is not."
+- answer grader: "Give 'yes' if the answer resolves the question, and 'no' if it does not."
+
+The wording is fixed here and will not be revised. Other controlled settings, as in section 5:
+per-question state reset; a failed question is recorded as a failure and never inherits another answer;
+temperature 0 and seed 42; the LLM `qwen2.5:7b-instruct-q8_0` (Ollama digest `2d9500c948416525`);
+cached LLM calls; retrieval grader not used (as in the released graph); k = 5; at most 5 iterations.
+
+A sanity check is run only on exposed questions (never final_eval or validation): grader "yes" rates
+with and without the added sentence are reported. It is not used to tune the wording.
+
+### LLM substitution (all settings)
+
+The paper used GPT-4o. All end-to-end results here use the free model above. Absolute EM/F1 are not
+comparable with the paper; comparisons between systems are, because every system uses the same model,
+prompts and settings.
 
