@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15; LLM choice rule in section 16)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15; LLM choice rule in section 16; final evaluation plan frozen in section 17)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -526,4 +526,31 @@ uses `qwen2.5:7b-instruct-q8_0`** (digest `2d9500c948416525`).
 Note: the original-runtime setup was rebuilt on 13 November with `scripts/setup_kaggle_session.sh`
 (commit `a5e0171`), which installs the full training freeze except the CUDA wheels, torch (installed as
 2.14.1+cu130) and packaging; pynndescent 0.6.0 as frozen.
+
+## 17. Controlled pipeline dry run and frozen final-evaluation plan (13 November 2026)
+
+### Dry run (validation, pipeline check only)
+
+`scripts/controlled_at_rag.py` (commit `957c7b6`; prompts read from the released source and verified equal
+to LangChain 0.3 rendering and parsing), first 20 validation questions x 3 systems, Qwen-7B, temperature 0:
+60 runs in 370 s with 4 workers; 1 parse error (original). Exact match original 0.10, no filter 0.35,
+TAE-R 0.30 (20 questions; not a result). First-retrieval AllGold@5 was 0 for all systems; the validation
+retrieval run gives the same 0 complete-evidence questions and the same 23 gold hits on these 20 questions,
+so the pipeline's retrieval reproduces the frozen evaluation exactly.
+
+### Final evaluation (run once, in this order; nothing is changed afterwards)
+
+Code frozen at commit `d72ce5e`.
+
+1. `fit_tae_r_topic_models.py --stages assign_final --allow-final --source-dir <tae-r-topics-v1>` for H2 and K2:
+   label the 56,680 final-corpus paragraphs, embed and label the 11,976 final_eval questions.
+2. `tae_r_router.py --final --allow-final` with the saved predictors (H2 primary, K2 secondary): every method
+   on all 11,976 final_eval questions; AllGold@5/10, Recall@5/10, eligibility, cost; paired bootstrap 95% CI
+   and McNemar against unfiltered and against strict; by question type where available.
+3. `controlled_at_rag.py --split final_eval --allow-final --question-ids e2e_500_ids.txt`, systems original,
+   nofilter, tae_r (H2). Primary end-to-end analysis: all 500 questions if they complete; if the runs cannot
+   finish, the nested e2e_300 is reported instead (declared here, before any run). Measures: EM, F1,
+   errors, first-retrieval AllGold@5, iterations, LLM calls, similarity computations, seconds; paired
+   bootstrap CIs on EM and F1.
+4. Back up every output with SHA-256 before analysis.
 
