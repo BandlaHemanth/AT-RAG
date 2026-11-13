@@ -323,6 +323,60 @@ def stage_assign(inputs, root, config, names, log):
             f"question outliers {record['info']['questions']['outlier_rate']:.2%}")
 
 
+def stage_assign_final(inputs, source, root, config, names, log, encode, corpora_dir):
+    """Final evaluation only (protocol: run once, after freezing): label the final retrieval corpus
+    and embed + label the final_eval questions with the frozen models read from `source`."""
+    manifest = json.loads((corpora_dir / "manifest.json").read_text(encoding="utf-8"))
+    for name in ("retrieval_final", "questions_final_eval"):
+        info = manifest["files"][name]
+        require(sha256_file(corpora_dir / info["file"]) == info["sha256"], f"{info['file']}: hash differs")
+    final_ids = jsonl_ids(corpora_dir / "retrieval_final.jsonl", "doc_id")
+    with open(corpora_dir / "questions_final_eval.jsonl", encoding="utf-8") as stream:
+        questions = [(r["question_id"], r["question_text"]) for r in map(json.loads, stream)]
+    umap_stage = Stage(source, "umap")
+    require(umap_stage.complete(), "source umap stage incomplete")
+    q_stage = Stage(root, "questions_final")
+    if not q_stage.complete():
+        model = umap_stage.load("umap_model.joblib")
+        vectors = normalise(np.asarray(encode([t for _, t in questions]), dtype=np.float32))
+        q_stage.save_json("question_ids.json", [qid for qid, _ in questions])
+        q_stage.save_array("question_embeddings.npy", vectors)
+        q_stage.save_array("question_5d.npy", model.transform(vectors).astype(np.float32))
+        q_stage.save_array("final_corpus_5d.npy", model.transform(rows_for(inputs, final_ids)).astype(np.float32))
+        q_stage.finish({"questions": len(questions), "final_documents": len(final_ids), "encoder": config["encoder"]})
+        log(f"questions_final: {len(questions)} questions, {len(final_ids)} final documents transformed")
+    q_ids = json.loads((q_stage.dir / "question_ids.json").read_text(encoding="utf-8"))
+    q_vectors = q_stage.load("question_embeddings.npy")
+    for name in names:
+        spec = config["candidates"][name]
+        fit_stage, stage = Stage(source, name + "/fit"), Stage(root, name + "/assign_final")
+        require(fit_stage.complete(), f"source fit stage incomplete for {name}")
+        if stage.complete():
+            log(f"assign_final {name}: complete, skipped")
+            continue
+        if spec["family"] == "hdbscan":
+            import hdbscan
+            model = fit_stage.load("hdbscan_model.joblib")
+            doc_labels, doc_strengths = hdbscan.approximate_predict(model, q_stage.load("final_corpus_5d.npy"))
+            q_points = q_stage.load("question_5d.npy")
+            q_labels, q_strengths = hdbscan.approximate_predict(model, q_points)
+            stage.save_array("question_membership.npy", hdbscan.membership_vector(model, q_points).astype(np.float32))
+        else:
+            centroids = fit_stage.load("centroids_384.npy")
+            doc_labels, doc_strengths = best_centroid(rows_for(inputs, final_ids), centroids)
+            q_labels, q_strengths = best_centroid(q_vectors, centroids)
+            stage.save_array("question_centroid_scores.npy", (q_vectors @ centroids.T).astype(np.float32))
+        stage.save_json("question_ids.json", q_ids)
+        stage.save_array("question_embeddings.npy", q_vectors)
+        stage.save_array("final_corpus_labels.npy", np.asarray(doc_labels, dtype=np.int32))
+        stage.save_array("final_corpus_strengths.npy", np.asarray(doc_strengths, dtype=np.float32))
+        stage.save_array("question_labels.npy", np.asarray(q_labels, dtype=np.int32))
+        stage.save_array("question_strengths.npy", np.asarray(q_strengths, dtype=np.float32))
+        record = stage.finish({"corpus": size_summary(np.asarray(doc_labels)), "questions": size_summary(np.asarray(q_labels))})
+        log(f"assign_final {name}: corpus outliers {record['info']['corpus']['outlier_rate']:.2%}, "
+            f"question outliers {record['info']['questions']['outlier_rate']:.2%}")
+
+
 def sentence_encoder(config, device):
     from sentence_transformers import SentenceTransformer
     enc = config["encoder"]
@@ -336,7 +390,16 @@ def sentence_encoder(config, device):
 
 
 def run(corpora_dir, embeddings_dir, output_dir, stages, names, *, frozen=FROZEN, config=CONFIG,
-        encode=None, device="cuda", log=print):
+        encode=None, device="cuda", log=print, allow_final=False, source_dir=None):
+    if "assign_final" in stages:
+        require(allow_final, "assign_final requires --allow-final (final evaluation, run once)")
+        require(source_dir is not None, "assign_final requires --source-dir (the frozen topics directory)")
+        require(set(stages) == {"assign_final"}, "assign_final runs on its own")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        inputs = load_inputs(corpora_dir, embeddings_dir, frozen)
+        stage_assign_final(inputs, Path(source_dir), output_dir, config, names, log,
+                           encode or sentence_encoder(config, device), corpora_dir)
+        return
     require(set(stages) <= set(STAGES), f"stages must be among {STAGES}")
     require(set(names) <= set(config["candidates"]), "unknown candidate")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -359,13 +422,16 @@ def main(argv=None):
     parser.add_argument("--corpora-dir", type=Path, required=True)
     parser.add_argument("--embeddings-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--stages", nargs="+", default=list(STAGES), choices=STAGES)
+    parser.add_argument("--stages", nargs="+", default=list(STAGES), choices=STAGES + ("assign_final",))
+    parser.add_argument("--allow-final", action="store_true", help="permit the final-evaluation assignment")
+    parser.add_argument("--source-dir", type=Path, help="frozen topics directory (for assign_final)")
     parser.add_argument("--candidates", nargs="+", default=list(CONFIG["candidates"]))
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args(argv)
     try:
         run(args.corpora_dir, args.embeddings_dir, args.output_dir, args.stages, args.candidates,
-            device=args.device, log=lambda m: print(time.strftime("%H:%M:%S"), m, flush=True))
+            device=args.device, log=lambda m: print(time.strftime("%H:%M:%S"), m, flush=True),
+            allow_final=args.allow_final, source_dir=args.source_dir)
     except (OSError, ValueError, KeyError) as error:
         print(f"Topic fitting failed: {error}", file=sys.stderr)
         return 1

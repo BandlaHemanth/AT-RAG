@@ -15,13 +15,16 @@ answer is identical to the previous question's (possible stale state).
 import os
 import sys
 
-# The old-LangChain environment pins numpy 1.26; the host's TensorFlow/JAX need numpy 2
-# and are not used by AT-RAG. Keep libraries from importing them (umap's optional
-# ParametricUMAP and transformers' backend checks would otherwise try).
-for _env in (("USE_TF", "0"), ("USE_JAX", "0"), ("USE_FLAX", "0"), ("USE_TORCH", "1")):
-    os.environ.setdefault(*_env)
-for _blocked in ("tensorflow", "jax", "jaxlib", "flax", "keras", "tf_keras"):
-    sys.modules.setdefault(_blocked, None)
+
+def isolate_host_ml_frameworks():
+    """When run as a script inside an old-numpy environment that can see the host's packages, keep
+    libraries from importing the host's TensorFlow/JAX (they need numpy 2 and are not used by AT-RAG;
+    umap's optional ParametricUMAP and transformers' backend checks would otherwise try). Not applied
+    on import, so importing this module (e.g. in tests) has no side effects."""
+    for env in (("USE_TF", "0"), ("USE_JAX", "0"), ("USE_FLAX", "0"), ("USE_TORCH", "1")):
+        os.environ.setdefault(*env)
+    for blocked in ("tensorflow", "jax", "jaxlib", "flax", "keras", "tf_keras"):
+        sys.modules.setdefault(blocked, None)
 
 import argparse
 import contextlib
@@ -219,6 +222,7 @@ def run(dataset, topic_model, store, n_questions, server, trace=False, temperatu
 
 
 def main(argv=None):
+    isolate_host_ml_frameworks()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset", type=Path, required=True, help="test_subsampled.jsonl (verified by hash)")
     parser.add_argument("--topic-model", type=Path, required=True, help="the supplied original BERTopic model file")

@@ -185,10 +185,11 @@ def route_tae_r(features, p1_topics, p2_topics, variant_model):
     return "unfiltered", None
 
 
-def question_rows(cand, inputs):
-    """Features and route outcomes for every router_train and validation question."""
-    doc_index = {doc: i for i, doc in enumerate(inputs["val_ids"])}
-    retriever = Retriever(fit.rows_for(inputs, inputs["val_ids"]), cand["doc_labels"])
+def question_rows(cand, inputs, corpus_ids=None):
+    """Features and route outcomes for every question of `cand` (default corpus: validation)."""
+    corpus_ids = inputs["val_ids"] if corpus_ids is None else corpus_ids
+    doc_index = {doc: i for i, doc in enumerate(corpus_ids)}
+    retriever = Retriever(fit.rows_for(inputs, corpus_ids), cand["doc_labels"])
     rows = []
     for qi, (split, qid) in enumerate(cand["ids"]):
         q = cand["q_vectors"][qi]
@@ -366,6 +367,67 @@ def run(corpora_dir, embeddings_dir, topics_dir, name, *, frozen=fit.FROZEN, log
     return report, rows, choices
 
 
+def run_final(corpora_dir, embeddings_dir, topics_dir, final_dir, name, model_path, *, frozen=fit.FROZEN, log=print):
+    """Final evaluation, run once: the SAVED predictor (no retraining) and every baseline on the
+    final_eval questions over the final retrieval corpus."""
+    import joblib
+    inputs = fit.load_inputs(corpora_dir, embeddings_dir, frozen)
+    manifest = json.loads((corpora_dir / "manifest.json").read_text(encoding="utf-8"))
+    for f in ("retrieval_final", "questions_final_eval"):
+        info = manifest["files"][f]
+        require(fit.sha256_file(corpora_dir / info["file"]) == info["sha256"], f"{info['file']}: hash differs")
+    final_ids = fit.jsonl_ids(corpora_dir / "retrieval_final.jsonl", "doc_id")
+    stage, f_stage = fit.Stage(final_dir, name + "/assign_final"), fit.Stage(topics_dir, name + "/fit")
+    require(stage.complete() and f_stage.complete(), "final assignment or fit stage incomplete")
+    q_ids = json.loads((stage.dir / "question_ids.json").read_text(encoding="utf-8"))
+    membership = (stage.load("question_membership.npy") if (stage.dir / "question_membership.npy").is_file() else None)
+    centroid_ids, centroids = fit.topic_centroids(fit.rows_for(inputs, inputs["fit_ids"]), f_stage.load("fit_labels.npy") + 1)
+    gold, types = {}, {}
+    with open(corpora_dir / "questions_final_eval.jsonl", encoding="utf-8") as stream:
+        for record in map(json.loads, stream):
+            gold[("final_eval", record["question_id"])] = record["gold_doc_ids"]
+            types[record["question_id"]] = record.get("type")
+    cand = {"ids": [("final_eval", q) for q in q_ids], "q_vectors": stage.load("question_embeddings.npy"),
+            "doc_labels": stage.load("final_corpus_labels.npy"), "q_labels": stage.load("question_labels.npy"),
+            "q_strengths": stage.load("question_strengths.npy"), "membership": membership,
+            "centroid_ids": centroid_ids - 1, "centroids": centroids, "gold": gold, "hdbscan": membership is not None}
+    saved = joblib.load(model_path)
+    require(saved["candidate"] == name, "saved predictor belongs to another candidate")
+    rows, n_docs, n_centroids = question_rows(cand, inputs, corpus_ids=final_ids)
+    log(f"{name}: {len(rows)} final_eval questions, {n_docs} final documents")
+    choices, report = {}, {"protocol": fit.PROTOCOL, "candidate": name, "split": "final_eval",
+                           "final_documents": n_docs, "topic_centroids": n_centroids,
+                           "saved_predictor_sha256": fit.sha256_file(model_path), "methods": {}, "comparisons": {}}
+    for variant, model in saved["variants"].items():
+        choices[variant] = [route_tae_r(r["features"], r["routes"]["P1_S3"], r["routes"]["S3"], model)[0] for r in rows]
+        report["methods"][variant] = summarise(rows, choices[variant], n_docs,
+                                               n_docs + n_centroids if variant == "tae_r" else n_centroids,
+                                               reuses_scan=(variant == "tae_r"))
+    for method in ["unfiltered", "strict", "tae_v1", "oracle"] + (["tae_v2", "fixed_three"] if cand["hdbscan"] else []):
+        choices[method] = [method] * len(rows)
+        report["methods"][method] = summarise(rows, choices[method], n_docs, 0)
+    for ref in ("unfiltered", "strict"):
+        base = [r["outcomes"][c]["all@5"] for r, c in zip(rows, choices[ref])]
+        for method in choices:
+            if method == ref:
+                continue
+            mine = [r["outcomes"][c]["all@5"] for r, c in zip(rows, choices[method])]
+            diff = paired_bootstrap(mine, base)
+            report["comparisons"][f"{method}_vs_{ref}"] = dict(diff, **mcnemar(mine, base), decision=gate2(diff))
+    if any(types.values()):
+        by_type = {}
+        for t in sorted({v for v in types.values() if v}):
+            idx = [i for i, r in enumerate(rows) if types[r["question_id"]] == t]
+            by_type[t] = {m: summarise([rows[i] for i in idx], [choices[m][i] for i in idx], n_docs, 0)["allgold@5"]
+                          for m in choices}
+            by_type[t]["questions"] = len(idx)
+        report["allgold@5_by_type"] = by_type
+    report["per_question_sha256"] = hashlib.sha256(json.dumps(
+        [[r["question_id"], {m: r["outcomes"][choices[m][i]] for m in choices}] for i, r in enumerate(rows)],
+        sort_keys=True).encode()).hexdigest()
+    return report, rows, choices
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--corpora-dir", type=Path, required=True)
@@ -374,7 +436,28 @@ def main(argv=None):
     parser.add_argument("--candidate", default="H2")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--save-model", type=Path, help="write the fitted TAE-R predictors and thresholds (joblib)")
+    parser.add_argument("--final", action="store_true", help="final evaluation with the saved predictor (run once)")
+    parser.add_argument("--allow-final", action="store_true")
+    parser.add_argument("--final-dir", type=Path, help="directory holding <candidate>/assign_final")
+    parser.add_argument("--router-model", type=Path, help="saved predictor (joblib) for --final")
     args = parser.parse_args(argv)
+    if args.final:
+        if not (args.allow_final and args.final_dir and args.router_model):
+            print("--final needs --allow-final, --final-dir and --router-model", file=sys.stderr)
+            return 1
+        report, rows, choices = run_final(args.corpora_dir, args.embeddings_dir, args.topics_dir, args.final_dir,
+                                          args.candidate, args.router_model)
+        with args.output.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(report, indent=1, sort_keys=True) + "\n")
+        with args.output.with_suffix(".questions.jsonl").open("x", encoding="utf-8") as stream:
+            for i, r in enumerate(rows):
+                stream.write(json.dumps({"question_id": r["question_id"], "routes": r["routes"],
+                                         "chosen": {m: choices[m][i] for m in choices}, "outcomes": r["outcomes"],
+                                         "features": r["features"]}, sort_keys=True) + "\n")
+        print(json.dumps({"methods": {m: {k: v for k, v in s.items() if k != "route_counts"}
+                                      for m, s in report["methods"].items()},
+                          "comparisons": report["comparisons"]}, indent=1))
+        return 0
     try:
         report, rows, choices = run(args.corpora_dir, args.embeddings_dir, args.topics_dir, args.candidate)
         model = report.pop("router_model")
