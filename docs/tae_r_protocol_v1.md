@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15; LLM choice rule in section 16; final evaluation plan frozen in section 17)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15; LLM choice rule in section 16; final evaluation plan frozen in section 17; final retrieval results in section 18)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -553,4 +553,45 @@ Code frozen at commit `d72ce5e`.
    errors, first-retrieval AllGold@5, iterations, LLM calls, similarity computations, seconds; paired
    bootstrap CIs on EM and F1.
 4. Back up every output with SHA-256 before analysis.
+
+## 18. Final retrieval results (13 November 2026, run once at commit `857295b`)
+
+The session was restarted by mistake before the first final run printed anything; no output was seen. The
+run below is the first and only one whose results were viewed (deterministic code and inputs).
+
+Final assignment: 11,976 final_eval questions; 56,680 final-corpus paragraphs. H2: corpus outliers 55.66%,
+question outliers 66.51%. K2: no outliers.
+
+### H2 (primary), 11,976 questions, saved predictor (no retraining)
+
+| Method | AllGold@5 | Recall@5 | AllGold@10 | Searched share | Similarity computations |
+|---|---:|---:|---:|---:|---:|
+| Strict (original AT-RAG) | 7.08% | 30.83% | 9.74% | 0.373 | 21,134 |
+| Fixed three | 8.07% | 32.61% | 11.12% | 0.377 | 21,355 |
+| TAE V1 | 12.50% | 40.63% | 17.13% | 0.668 | 37,848 |
+| TAE V2 | 14.21% | 44.01% | 19.36% | 0.788 | 44,645 |
+| **TAE-R** | **16.52%** | **48.72%** | **22.44%** | 0.868 | 56,996 |
+| TAE-R-P1 | 16.38% | 48.32% | 22.34% | 0.975 | 55,560 |
+| Unfiltered | 16.65% | 48.88% | 22.68% | 1.000 | 56,680 |
+| Oracle (upper bound) | 20.87% | 52.24% | 27.05% | 0.453 | 25,652 |
+
+Comparisons on AllGold@5 (paired bootstrap 95% CI, exact McNemar):
+
+| Comparison | Difference | 95% CI | Helps / hurts | p | Decision (section 7 rule) |
+|---|---:|---|---|---:|---|
+| TAE-R vs strict | +9.44 pt | [+8.87, +10.03] | 1,233 / 102 | <1e-200 | better |
+| TAE-R vs unfiltered | -0.13 pt | [-0.23, -0.03] | 10 / 25 | 0.017 | equivalent (within +/-1 pt) |
+| TAE-R-P1 vs unfiltered | -0.27 pt | [-0.37, -0.18] | 2 / 34 | <1e-7 | equivalent |
+| TAE V2 vs strict | +7.13 pt | [+6.60, +7.66] | 956 / 102 | <1e-170 | better |
+| Strict vs unfiltered | -9.57 pt | [-10.15, -8.98] | 111 / 1,257 | <1e-200 | worse |
+| Oracle vs unfiltered | +4.22 pt | [+3.86, +4.58] | 505 / 0 | <1e-150 | better |
+
+The TAE-R deficit against unfiltered search is statistically detectable at this sample size (p = 0.017) but
+negligible in size (0.13 points) and inside the pre-declared equivalence margin.
+
+### K2 (secondary)
+
+Strict 3.38%; TAE-R 16.44% (vs strict +13.06 pt [+12.42, +13.70], 1,614 / 50; vs unfiltered -0.21 pt
+[-0.32, -0.10], 9 / 34, equivalent); TAE-R-P1 16.51% (equivalent); unfiltered 16.65%; oracle 26.77% at
+searched share 0.016 (+10.12 pt over unfiltered).
 
