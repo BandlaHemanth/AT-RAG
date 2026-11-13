@@ -391,7 +391,7 @@ class Engine:
 
 
 def build_engine(corpora_dir, embeddings_dir, topics_dir, split, router_path, *, allow_final=False,
-                 device="cuda", frozen=None):
+                 device="cuda", frozen=None, final_dir=None):
     fit = _load("fit_tae_r_topic_models", "fit_tae_r_topic_models.py")
     router = _load("tae_r_router", "tae_r_router.py")
     import joblib
@@ -407,7 +407,7 @@ def build_engine(corpora_dir, embeddings_dir, topics_dir, split, router_path, *,
     records = [json.loads(line) for line in (corpora_dir / corpus_file).open(encoding="utf-8")]
     doc_ids = [r["doc_id"] for r in records]
     texts = [r["text"] for r in records]
-    stage = fit.Stage(topics_dir, stage_name)
+    stage = fit.Stage(final_dir if (split == "final_eval" and final_dir) else topics_dir, stage_name)
     if not stage.complete():
         raise ValueError(f"incomplete stage {stage.dir}")
     labels_file = "validation_corpus_labels.npy" if split == "validation" else "final_corpus_labels.npy"
@@ -486,6 +486,7 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, help="first N questions (validation dry run)")
     parser.add_argument("--systems", nargs="+", default=list(SYSTEMS), choices=SYSTEMS)
     parser.add_argument("--allow-final", action="store_true")
+    parser.add_argument("--final-dir", type=Path, help="directory holding H2/assign_final (final_eval)")
     parser.add_argument("--server", default="http://127.0.0.1:11434/v1")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -495,7 +496,7 @@ def main(argv=None):
     if not digest.startswith(MODEL_DIGEST):
         raise SystemExit(f"served {MODEL} digest {digest} differs from the protocol")
     engine, questions = build_engine(args.corpora_dir, args.embeddings_dir, args.topics_dir, args.split,
-                                     args.router_model, allow_final=args.allow_final)
+                                     args.router_model, allow_final=args.allow_final, final_dir=args.final_dir)
     if args.question_ids:
         order = args.question_ids.read_text(encoding="utf-8").split()
     else:
