@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15; LLM choice rule in section 16; final evaluation plan frozen in section 17; final retrieval results in section 18; post-hoc TAE-R+ rules in section 19)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15; LLM choice rule in section 16; final evaluation plan frozen in section 17; final retrieval results in section 18; post-hoc TAE-R+ rules in section 19; final end-to-end results in section 20)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -629,4 +629,42 @@ exploration is reported as a negative result: none of the pre-retrieval topic si
 mass, soft boosting, coverage filtering, a stronger predictor) yields a reliable gain over unfiltered dense
 retrieval, despite the oracle headroom of +4.2 (H2) / +10.1 (K2) points on the final set. Topic diversity in
 the top-k shows a small, non-significant positive trend.
+
+## 20. Final end-to-end results (13 November 2026, run once, plan of section 17)
+
+`scripts/controlled_at_rag.py` at commit `f9d7d88`; final_eval e2e_500 (nested e2e_300 ordered first;
+all 500 completed, so the 500-question analysis is primary as declared); `qwen2.5:7b-instruct-q8_0`
+(digest `2d9500c948416525`), temperature 0, seed 42, clarified graders, k = 5, at most 5 iterations;
+H2 topics; saved TAE-R predictor. 1,500 runs, 4 workers.
+
+| System | EM | F1 | Errors | First-retrieval AllGold@5 | Mean iterations | Mean LLM calls | Mean similarity computations | Mean s* |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Original AT-RAG (strict) | 17.4% | 24.7% | 9 | 6.2% | 4.92 | 11.20 | 27,969 | 23.1 |
+| AT-RAG without filter | 28.8% | 36.3% | 11 | 16.4% | 4.91 | 11.30 | 83,433 | 24.4 |
+| AT-RAG with TAE-R | 29.6% | 36.4% | 10 | 16.4% | 4.92 | 11.31 | 83,442 | 20.3 |
+
+\* Wall-clock seconds with four concurrent runs sharing one GPU; not a controlled latency measurement and
+not used for any claim. Errors (output-parsing failures) score 0.
+
+Paired comparisons over the 500 questions (bootstrap 95% CI, 10,000 resamples, seed 42; exact McNemar):
+
+| Comparison | EM difference | 95% CI | Helps / hurts | p | F1 difference | 95% CI |
+|---|---:|---|---|---:|---:|---|
+| TAE-R vs original | +12.2 pt | [+8.4, +16.0] | 81 / 20 | 6.9e-10 | +11.7 pt | [+8.1, +15.4] |
+| No filter vs original | +11.4 pt | [+7.6, +15.4] | 79 / 22 | 1.0e-8 | +11.5 pt | [+7.8, +15.2] |
+| TAE-R vs no filter | +0.8 pt | [-1.4, +3.0] | 17 / 13 | 0.59 | +0.2 pt | [-1.9, +2.3] |
+
+First-retrieval AllGold@5: TAE-R vs original +10.2 pt [+7.6, +13.0] (53 / 2); TAE-R and no filter identical on all
+500 questions.
+
+Outcome: at answer level TAE-R is significantly better than the original AT-RAG and not significantly
+different from AT-RAG without filtering, consistent with the retrieval results of section 18.
+
+Backup (private Kaggle dataset `bandlahemanth/tae-r-final-v1`, new version with the end-to-end outputs, LLM
+cache and exploration reports): records.jsonl `0f783d84c9e5419a4093df23a9adda7d0ed6df64bfa6d0ed63d79987e6e9d42e`;
+summary.json `abec2884574c9c73ed466570f616a241e488b82afb4b110520a8ebf466b55f06`; final_retrieval_H2.json
+`942aa6119e279be5265064c229660321a406c0e01d11701f3c338d4bb4bee62e`; final_retrieval_H2.questions.jsonl
+`bfdba9516162c8d81652321ed85fa2578f10d68278d3589e036a5b2765aa742f`; final_retrieval_K2.json
+`5b4fd440ff17d6889a9197e443abc4b63be5079cf0d553e11a42682ec04ded34`; final_retrieval_K2.questions.jsonl
+`73fa8c6362eb7dad689453b7e5632973a19478e364e4ca39ee51712f38e77c09`.
 
