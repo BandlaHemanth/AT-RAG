@@ -513,3 +513,17 @@ Reference (7B, same setting): mean iterations 4.40, 14.1 s per question.
 | grader_sanity_released_t0_v1.json | `ff710323b4c25ba39fa40c6702de8ec4fb71d8f334fa05eb6076c026503c8783` |
 | grader_sanity_clarified_t0_v1.json | `8775b7f4159070adb02783852f36e1bbdd44541ce6834960245af84143893ec0` |
 
+### LLM choice test result (13 November 2026)
+
+Same setting as the 7B sanity check (original code and store, 20 exposed questions, temperature 0,
+clarified graders), `qwen2.5:14b-instruct-q4_K_M` (digest `7cdf5a0187d5c58c`):
+EM 0.25, F1 0.29, mean iterations 4.90, mean LLM calls 11.6, **109.9 s per question**, 0 errors;
+hallucination grader "yes" 20 / 84, answer grader "yes" 1 / 15.
+
+Rule outcome: iterations 4.90 is not below 3.5 and 109.9 s exceeds 30 s, so **the controlled comparison
+uses `qwen2.5:7b-instruct-q8_0`** (digest `2d9500c948416525`).
+
+Note: the original-runtime setup was rebuilt on 13 November with `scripts/setup_kaggle_session.sh`
+(commit `a5e0171`), which installs the full training freeze except the CUDA wheels, torch (installed as
+2.14.1+cu130) and packaging; pynndescent 0.6.0 as frozen.
+
