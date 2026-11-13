@@ -37,12 +37,12 @@ if [ ! -x "$V/bin/python" ]; then
   python3 -m pip install -q uv >>"$LOG" 2>&1
   uv python install 3.12.3 >>"$LOG" 2>&1
   uv venv -q --python 3.12.3 "$V" >>"$LOG" 2>&1
-  grep -iE '^(numpy|numba|llvmlite|scipy|scikit-learn|umap-learn|hdbscan|bertopic|transformers|sentence-transformers|cloudpickle|joblib|tokenizers|huggingface-hub|pandas)==' "$FREEZE" \
-    > /kaggle/working/sci_constraints.txt
-  echo "torch==2.14.1" >> /kaggle/working/sci_constraints.txt
+  # The full training freeze (as on 11 Nov), except the CUDA wheels, torch (installed below as the
+  # matching CUDA 13 build) and packaging (its pin conflicts with LangChain 0.3; not scientific).
+  grep -viE '^(nvidia-|torch==|packaging==)' "$FREEZE" | grep -v '^#' | grep -v '^$' > /kaggle/working/freeze_core.txt
+  { cat /kaggle/working/freeze_core.txt; echo "torch==2.14.1"; } > /kaggle/working/sci_constraints.txt
   uv pip install -q --python "$V/bin/python" torch==2.14.1 --index-url https://download.pytorch.org/whl/cu130 >>"$LOG" 2>&1
-  uv pip install -q --python "$V/bin/python" -c /kaggle/working/sci_constraints.txt \
-    $(grep -v '^torch' /kaggle/working/sci_constraints.txt | tr '\n' ' ') >>"$LOG" 2>&1
+  uv pip install -q --python "$V/bin/python" -r /kaggle/working/freeze_core.txt -c /kaggle/working/sci_constraints.txt >>"$LOG" 2>&1
   uv pip install -q --python "$V/bin/python" -c /kaggle/working/sci_constraints.txt \
     langchain==0.3.2 langchain-community==0.3.1 chromadb==0.5.11 python-decouple==3.8 \
     openai==1.51.2 httpx==0.27.2 posthog==3.7.0 langgraph==0.2.34 >>"$LOG" 2>&1
@@ -50,6 +50,6 @@ fi
 
 step "versions"
 python3 -c "import umap, hdbscan, sklearn, numpy; print('main:', umap.__version__, sklearn.__version__, numpy.__version__)"
-"$V/bin/python" -c "import sys, torch, numpy, numba, bertopic, langchain; print('py312:', sys.version.split()[0], torch.__version__, 'cuda', torch.cuda.is_available(), numpy.__version__, numba.__version__, bertopic.__version__, langchain.__version__)"
+"$V/bin/python" -c "import sys, torch, numpy, numba, bertopic, langchain, pynndescent, importlib.metadata as m; print('py312:', sys.version.split()[0], torch.__version__, 'cuda', torch.cuda.is_available(), numpy.__version__, numba.__version__, bertopic.__version__, langchain.__version__, 'pynndescent', m.version('pynndescent'))"
 curl -s http://127.0.0.1:11434/api/tags | python3 -c "import json,sys; print('ollama:', {m['name']: m['digest'][:16] for m in json.load(sys.stdin)['models']})"
 echo "setup complete"
