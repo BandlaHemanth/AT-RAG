@@ -1,4 +1,4 @@
-# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15; LLM choice rule in section 16; final evaluation plan frozen in section 17; final retrieval results in section 18)
+# TAE-R experimental protocol v1 (FROZEN 10 November 2026; amendments v1.1 in section 10, v1.2 in section 11; selection and Gate 1 in section 12; v1.3 in section 13; TAE-R design frozen in section 14; validation results and Gate 2 in section 15; LLM choice rule in section 16; final evaluation plan frozen in section 17; final retrieval results in section 18; post-hoc TAE-R+ rules in section 19)
 
 Status: frozen on 10 November 2026 with the record in section 9, before any
 validation or final-evaluation result exists. Any later change is a new
@@ -594,4 +594,23 @@ negligible in size (0.13 points) and inside the pre-declared equivalence margin.
 Strict 3.38%; TAE-R 16.44% (vs strict +13.06 pt [+12.42, +13.70], 1,614 / 50; vs unfiltered -0.21 pt
 [-0.32, -0.10], 9 / 34, equivalent); TAE-R-P1 16.51% (equivalent); unfiltered 16.65%; oracle 26.77% at
 searched share 0.016 (+10.12 pt over unfiltered).
+
+## 19. Post-hoc TAE-R+ exploration (declared 13 November 2026, after the final v1 retrieval run)
+
+Status: post-hoc. The frozen v1 results of section 18 remain the primary, confirmatory result and are not
+changed. Any TAE-R+ result is reported separately and labelled post-hoc.
+
+Rules (script `scripts/tae_r_plus_explore.py`, commit `c790d0a`):
+
+1. Data: validation fold only, split by a fixed hash (`sha256("tae-r-plus:" + question_id)` parity) into
+   TUNE and CONFIRM halves. router_train is used only to train predictors, as in v1.
+2. Variant families: soft topic boosting (bonus l x P(S3 adequate) for the probe's top-3 topics,
+   l in 0.01-0.08); topic-diverse top-k (at most 1, 2 or 3 paragraphs per topic); their combination;
+   probe-mass coverage filter (shares 0.5-0.9); the v1 design with a gradient-boosting predictor.
+3. Selection: the single best variant on TUNE by AllGold@5 (ties: Recall@5, then lower searched share).
+4. Confirmation: only the chosen variant is scored on CONFIRM, against unfiltered and frozen TAE-R
+   (paired bootstrap 95% CI, McNemar).
+5. Final: if and only if the chosen variant's CONFIRM interval against unfiltered lies above 0, it is run
+   once on final_eval with the same retrieval evaluation as section 18, reported as TAE-R+ (post-hoc).
+   Otherwise no further final_eval run is made and the exploration is reported as a negative result.
 
