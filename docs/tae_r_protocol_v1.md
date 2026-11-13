@@ -614,3 +614,19 @@ Rules (script `scripts/tae_r_plus_explore.py`, commit `c790d0a`):
    once on final_eval with the same retrieval evaluation as section 18, reported as TAE-R+ (post-hoc).
    Otherwise no further final_eval run is made and the exploration is reported as a negative result.
 
+### TAE-R+ exploration result (13 November 2026, rules above, commit `4f9c92d`)
+
+H2 tune half (2,288 questions): unfiltered had the highest AllGold@5 (17.15%); best non-baseline variant
+diverse(3) 17.06%; soft boosting and frozen TAE-R 16.97%; coverage filters and the gradient-boosting predictor
+lower. Chosen: diverse(3). Confirm half: diverse(3) 15.86% vs unfiltered 15.42% (+0.43 pt, CI [-0.09, +0.96],
+24 / 14) and vs frozen TAE-R 15.38% (+0.48 pt, CI [-0.04, +1.04], 26 / 15).
+
+K2 tune half: chosen diverse(3) 17.41% (unfiltered 17.15%). Confirm half: diverse(3) 15.64% vs unfiltered 15.42%
+(+0.22 pt, CI [-0.13, +0.56], 11 / 6) and vs frozen TAE-R 15.25% (+0.39 pt, CI [0.00, +0.78], 15 / 6).
+
+**Outcome: the condition of rule 5 is not met for either model, so TAE-R+ is not run on final_eval.** The
+exploration is reported as a negative result: none of the pre-retrieval topic signals tried (probe topic
+mass, soft boosting, coverage filtering, a stronger predictor) yields a reliable gain over unfiltered dense
+retrieval, despite the oracle headroom of +4.2 (H2) / +10.1 (K2) points on the final set. Topic diversity in
+the top-k shows a small, non-significant positive trend.
+
