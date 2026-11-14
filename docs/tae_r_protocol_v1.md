@@ -714,3 +714,57 @@ S3 132, S1 25.
 Outputs in `/kaggle/working/analysis_v1/`: `analysis.json` (with fixed-hash examples), `tables.tex` (booktabs),
 `cost_accuracy_{H2,K2}.{pdf,png}`, `by_type_{H2,K2}.{pdf,png}`; backed up with the faithful reproduction and latency
 results (hashes recorded with that backup).
+
+## 22. Faithful reproduction and controlled latency (14-15 November 2026)
+
+### Faithful reproduction of the released AT-RAG
+
+`scripts/smoke_test_original_at_rag.py` at commit `071ab36` (same driver as section 13, resumable output only):
+`models/AT_RAG.py` unedited, released settings (temperature 0.7 default, released grader prompts, k = 5,
+max_iter = 5), the supplied original BERTopic model, the original store built from the 5,000 context occurrences
+of `test_subsampled.jsonl` (MiniLM embeddings), all 500 test_subsampled questions; the only substitution is the LLM
+(`qwen2.5:7b-instruct-q8_0`, digest `2d9500c948416525`, served under the name `gpt-4o`). The first attempt
+(14 November, afternoon) was lost at 231 / 500 questions when the interactive session ended; it was rerun from the
+start in a new session, and only the complete rerun is reported.
+
+| Questions | EM | F1 | Errors | Mean iterations | Mean LLM calls | Question topic -1 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 500 | 22.0% | 30.0% | 15 | 4.83 | 10.99 | 47 |
+
+This confirms that the released pipeline runs end to end with the substituted LLM. It is not comparable with
+section 20 (different question set; a 5,000-paragraph store that contains every gold paragraph, versus the
+56,680-paragraph final corpus; temperature 0.7 versus 0; released versus clarified graders) and not comparable with
+the paper's scores (GPT-4o generator; GPT-4 judge on a 0-10 scale, not EM).
+
+### Controlled retrieval latency
+
+`scripts/measure_retrieval_latency.py` at commit `071ab36`: H2, validation corpus (56,655 paragraphs), first 1,020
+validation questions (20 warm-up, 1,000 timed), one CPU thread for BLAS and torch, MiniLM on CPU, k = 5, run after the
+reproduction had finished (quiet machine). Mean milliseconds per question:
+
+| Method | Total | Without embedding | Embed | Topic inference | Membership | Route | Scan | Rank |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Unfiltered | 27.12 | 7.67 | 19.45 | - | - | - | 7.42 | 0.24 |
+| Strict (original) | 29.04 | 9.58 | 19.45 | 6.55 | - | - | 2.93 | 0.11 |
+| TAE V1 | 30.96 | 11.51 | 19.45 | 6.55 | - | - | 4.80 | 0.16 |
+| TAE V2 | 68.78 | 49.33 | 19.45 | 6.55 | 35.58 | 1.15 | 5.86 | 0.19 |
+| TAE-R | 35.29 | 15.84 | 19.45 | 6.55 | - | 1.68 | 7.40 | 0.22 |
+| TAE-R-P1 | 34.98 | 15.53 | 19.45 | 6.55 | - | 1.56 | 7.35 | 0.08 |
+
+TAE-R adds about 6 ms per question over the original filter and about 8 ms over unfiltered search, negligible against
+the end-to-end LLM time (about 16-24 s per question). At this corpus size topic filtering saves no time: a full exact
+scan costs about 7 ms.
+
+Verification issue found: the run's self-check reported top-k differences from the reference ranking for 27
+(unfiltered), 23 (strict) and 23 (TAE V1) of 1,000 questions, and did not check the other three methods. Cause: the
+timed top-k function did not break exact score ties by index (exact ties arise from paragraphs with identical
+embeddings); fixed and extended to check all six methods at commit `c015706`. Timing is unaffected in substance;
+the accuracy results (sections 18 and 20) use the evaluation code, not this script. A verified rerun is to be recorded
+below.
+
+Backup: private Kaggle dataset `bandlahemanth/tae-r-extras-v1` (faithful_v1, analysis_v1, latency_v1 and
+`SHA256SUMS.json` with full hashes). SHA-256 prefixes: faithful_500.json `3ab64459aa56d8f2`,
+faithful_500.partial.jsonl `83af1bb9e032fe69`, run.log `434bb9e1c364cdbc`, analysis.json `21547bccf6576e2a`,
+tables.tex `656f1af6684307c1`, cost_accuracy_H2.pdf `c1c5f994f955d322`, by_type_H2.pdf `0d726adb20ccaf61`,
+latency_H2_validation.json `09cfd4a9e55f556d`. Raw 2Wiki dev.json (not backed up; re-downloadable) SHA-256 prefix
+`21b0a6ffef454f88`.
