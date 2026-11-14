@@ -47,8 +47,9 @@ def topk(scores, k):
     k = min(k, len(scores))
     if k == 0:
         return np.empty(0, dtype=np.int64)
-    part = np.argpartition(-scores, k - 1)[:k]
-    return part[np.lexsort((part, -scores[part]))]
+    kth = -np.partition(-scores, k - 1)[k - 1]
+    part = np.flatnonzero(scores >= kth)  # every index tied with the k-th score, so ties break by index
+    return part[np.lexsort((part, -scores[part]))][:k]
 
 
 class TopicIndex:
@@ -120,6 +121,7 @@ def run_methods(text, index, components, router, policy, models):
     with t("rank"):
         top = topk(scores, K)
     out["unfiltered"] = (top, t.parts)
+    allowed_of = {"unfiltered": None, "strict": [label], "tae_v1": None if label == -1 else [label]}
 
     t = fresh()
     out["strict"] = (index.filtered(q, [label], t), t.parts)
@@ -146,6 +148,7 @@ def run_methods(text, index, components, router, policy, models):
     else:
         top = index.filtered(q, topics, t)
     out["tae_v2"] = (top, t.parts)
+    allowed_of["tae_v2"] = topics
 
     for variant in ("tae_r", "tae_r_p1"):
         t = fresh()
@@ -162,7 +165,8 @@ def run_methods(text, index, components, router, policy, models):
                 keep = np.flatnonzero(np.isin(index.labels, allowed))
                 top = keep[topk(s[keep], K)]
         out[variant] = (top, t.parts)
-    return out, q, label
+        allowed_of[variant] = allowed
+    return out, q, label, allowed_of
 
 
 def reference_topk(scores, labels, allowed):
@@ -190,14 +194,13 @@ def summarise(per_question):
 def measure(texts, index, components, router, policy, models, warmup, log=print):
     per_question, mismatches = [], {m: 0 for m in METHODS}
     for i, text in enumerate(texts):
-        results, q, label = run_methods(text, index, components, router, policy, models)
+        results, q, label, allowed_of = run_methods(text, index, components, router, policy, models)
         if i < warmup:
             continue
         per_question.append({m: dict(parts) for m, (_, parts) in results.items()})
         # Same method as the accuracy evaluation: compare with the reference ranking (untimed).
         scores = index.docs @ q
-        refs = {"unfiltered": None, "strict": [label], "tae_v1": None if label == -1 else [label]}
-        for m, allowed in refs.items():
+        for m, allowed in allowed_of.items():
             mismatches[m] += int(not np.array_equal(results[m][0], reference_topk(scores, index.labels, allowed)))
         if (i + 1) % 100 == 0:
             log(f"{i + 1}/{len(texts)} questions timed")

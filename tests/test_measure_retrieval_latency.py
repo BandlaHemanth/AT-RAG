@@ -46,10 +46,26 @@ class LatencyTests(unittest.TestCase):
         scores = np.array([0.5, 0.9, 0.5, 0.1, 0.9, 0.5], dtype=np.float32)
         self.assertEqual(lat.topk(scores, 4).tolist(), np.argsort(-scores, kind="stable")[:4].tolist())
 
+    def test_topk_breaks_exact_ties_by_index(self):
+        scores = np.array([0.3, 0.7, 0.7, 0.7, 0.1, 0.7, 0.7, 0.7], dtype=np.float32)
+        for k in (1, 3, 5, 6):
+            self.assertEqual(lat.topk(scores, k).tolist(), np.argsort(-scores, kind="stable")[:k].tolist())
+
+    def test_duplicate_vectors_match_reference(self):
+        index, components, models, texts = fixture()
+        docs = index.docs.copy()
+        docs[1::2] = docs[0::2]  # every paragraph has an exact duplicate: ties everywhere
+        index = lat.TopicIndex(docs, index.labels)
+        for text in texts:
+            results, q, label, allowed_of = lat.run_methods(text, index, components, router, policy, models)
+            scores = index.docs @ q
+            for method, allowed in allowed_of.items():
+                self.assertEqual(results[method][0].tolist(), lat.reference_topk(scores, index.labels, allowed).tolist(), method)
+
     def test_every_path_equals_reference_ranking(self):
         index, components, models, texts = fixture()
         for text in texts:
-            results, q, label = lat.run_methods(text, index, components, router, policy, models)
+            results, q, label, allowed_of = lat.run_methods(text, index, components, router, policy, models)
             scores = index.docs @ q
             for method, allowed in (("unfiltered", None), ("strict", [label]),
                                     ("tae_v1", None if label == -1 else [label])):
