@@ -668,3 +668,49 @@ summary.json `abec2884574c9c73ed466570f616a241e488b82afb4b110520a8ebf466b55f06`;
 `5b4fd440ff17d6889a9197e443abc4b63be5079cf0d553e11a42682ec04ded34`; final_retrieval_K2.questions.jsonl
 `73fa8c6362eb7dad689453b7e5632973a19478e364e4ca39ee51712f38e77c09`.
 
+
+## 21. Descriptive analysis of the frozen final outputs (14 November 2026)
+
+Script `scripts/analyze_final_results.py` (commit `1f177a9`). It reads only the per-question outputs of
+sections 18 and 20; it runs no retrieval and no LLM call, selects nothing and tunes nothing. Question types come
+from the raw 2WikiMultiHopQA `dev.json` (12,576 questions, SHA-256 prefix `21b0a6ffef454f88`, from the repository's
+`download/raw_data.sh` link), joined on `question_id = _id`; all 11,976 final_eval questions matched.
+
+**Gold availability** (share of questions whose gold paragraphs all lie inside the set a method searches; the
+ceiling on its AllGold): H2 strict 31.50%, fixed three 36.29%, TAE V1 72.07%, TAE V2 82.55%, TAE-R 96.44%,
+TAE-R-P1 97.01%, unfiltered and oracle 100%. K2: strict 9.86%, TAE-R 96.26%, TAE-R-P1 99.67%. The original
+single-topic filter removes at least one gold paragraph before ranking for 68.5% (H2) / 90.1% (K2) of questions.
+
+**TAE-R routes (H2).** S1 for 559 questions (4.67%; route adequate 78.89%; AllGold@5 21.11% vs 22.18% unfiltered on the
+same questions), S3 for 3,038 (25.37%; adequate 89.86%; 20.87% vs 21.17%), unfiltered for 8,379 (69.96%; S3 would have
+been adequate for 60.53% of them). The router is conservative: it rarely filters, and when it does its loss against
+unfiltered search comes from the 10-21% of filtered routes that are inadequate.
+
+**Oracle gap (H2).** 505 questions (4.22%) are fully retrieved by the oracle topic filter but not by unfiltered
+search; TAE-R solves 10 of them, having routed 378 to unfiltered, 117 to S3 and 10 to S1 (gold spans 1 topic in 258,
+2 topics in 247). K2: 1,212 questions (10.12%), TAE-R solves 9. The unrealised headroom lies in recognising when a
+filter would help, not in the filters themselves.
+
+**Question types (H2, AllGold@5 strict / TAE-R / unfiltered / oracle).** Comparison (2,891; 2 gold paragraphs):
+14.87 / 44.79 / 45.07 / 54.79. Compositional (4,999; 2 gold): 5.86 / 9.82 / 9.90 / 13.26. Inference (1,458; 2 gold):
+8.57 / 13.24 / 13.44 / 17.28. Bridge comparison (2,628; 4 gold paragraphs each): 0.00 for every method including the
+oracle (AllGold@10 at most 0.08%), while mean gold hits@5 are strict 0.907, TAE-R 1.490, unfiltered 1.490, oracle
+1.564. AllGold@5 is therefore structurally unattainable for bridge-comparison questions with a single dense query
+(two of the four gold paragraphs are second-hop entities the question does not describe); this caps overall AllGold@5
+at 78.06% for every method and is reported as a property of the metric, not of any router. TAE-R improves on strict in
+every type; K2 shows the same pattern (comparison: strict 4.77, TAE-R 44.38, oracle 69.35).
+
+**End-to-end (500 questions).** EM given that the first retrieval held all gold paragraphs vs not: original
+58.06% (n = 31) vs 14.71% (n = 469); no filter 73.17% (n = 82) vs 20.10%; TAE-R 76.83% (n = 82) vs 20.33%. Retrieval
+completeness is the main driver of answer correctness, and TAE-R gives complete first retrieval for 82 questions against
+31 for the original. Of the 81 questions TAE-R answers correctly and the original does not, 32 have a better first
+retrieval under TAE-R and 49 the same AllGold status (both incomplete; later rewrites and partial hits differ); of the
+20 the other way, 19 have the same status. Iteration cap reached: original 97.6%, no filter 96.8%, TAE-R 97.2% (the
+grader behaviour of section 13). Output-parsing failures: 9 / 11 / 10, all `OutputParserError`. EM by type
+(original / no filter / TAE-R): bridge comparison (100) 31.0 / 45.0 / 42.0; comparison (111) 36.9 / 64.0 / 67.6;
+compositional (217) 4.6 / 9.2 / 9.2; inference (72) 6.9 / 11.1 / 15.3. TAE-R first-retrieval routes: unfiltered 343,
+S3 132, S1 25.
+
+Outputs in `/kaggle/working/analysis_v1/`: `analysis.json` (with fixed-hash examples), `tables.tex` (booktabs),
+`cost_accuracy_{H2,K2}.{pdf,png}`, `by_type_{H2,K2}.{pdf,png}`; backed up with the faithful reproduction and latency
+results (hashes recorded with that backup).
