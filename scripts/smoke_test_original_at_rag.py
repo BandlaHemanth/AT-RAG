@@ -158,7 +158,8 @@ def original_environment(topic_model):
             sys.path[:] = previous_path
 
 
-def run(dataset, topic_model, store, n_questions, server, trace=False, temperature=None, clarified=False):
+def run(dataset, topic_model, store, n_questions, server, trace=False, temperature=None, clarified=False,
+        progress_path=None):
     ingest = load_module("ingest_original", ROOT / "scripts/ingest_original_2wiki_minilm.py")
     dataset, topic_model, store = Path(dataset).resolve(), Path(topic_model).resolve(), Path(store).resolve()
     if not store.exists():
@@ -173,7 +174,11 @@ def run(dataset, topic_model, store, n_questions, server, trace=False, temperatu
     os.environ.update(OPENAI_API_KEY="local-ollama", GEMINI_API="unused", OPENAI_API_BASE=server)
     samples = [json.loads(line) for line in dataset.open(encoding="utf-8")][:n_questions]
     counter = count_llm_calls()
-    records = []
+    records, resumed_at = [], None
+    if progress_path is not None and Path(progress_path).is_file():
+        records = [json.loads(line) for line in Path(progress_path).open(encoding="utf-8") if line.strip()]
+        resumed_at = len(records) or None
+    done = {r["question_id"] for r in records}
     with original_environment(topic_model):
         at_rag = load_module("AT_RAG", ROOT / "models/AT_RAG.py")
         pipeline = at_rag.TopicCoTSelfRAG(max_iter=5, nr_topics=10, max_doc_retrived=5,
@@ -187,6 +192,8 @@ def run(dataset, topic_model, store, n_questions, server, trace=False, temperatu
         if trace:
             install_recorders(pipeline, trace_log)
         for sample in samples:
+            if sample["question_id"] in done:
+                continue
             trace_log.clear()
             question = sample["question_text"]
             topic = int(pipeline.trainer.get_topics_with_probabilities([question])[0][0])
@@ -204,6 +211,9 @@ def run(dataset, topic_model, store, n_questions, server, trace=False, temperatu
                             "seconds": round(time.time() - started, 1), "error": error,
                             "exact_match": exact_match(answer, truths), "f1": round(f1_score(answer, truths), 4),
                             "trace": list(trace_log) if trace else None})
+            if progress_path is not None:
+                with Path(progress_path).open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(records[-1], ensure_ascii=False) + "\n")
     flags = stale_flags([r["answer"] for r in records], [r["error"] for r in records])
     for record, flag in zip(records, flags):
         record["suspect_stale_or_error"] = flag
@@ -218,6 +228,7 @@ def run(dataset, topic_model, store, n_questions, server, trace=False, temperatu
                "question_topic_minus_one": sum(r["question_topic"] == -1 for r in records)}
     return {"setting": "faithful reproduction smoke test; LLM substituted via local OpenAI-compatible server",
             "temperature": pipeline.llm.temperature, "clarified_graders": clarified,
+            "resumed_after_question": resumed_at,
             "server": server, "store": build, "summary": summary, "records": records}
 
 
@@ -235,7 +246,7 @@ def main(argv=None):
     parser.add_argument("--clarified-graders", action="store_true", help="protocol v1.3 grader sentences (sanity check)")
     args = parser.parse_args(argv)
     report = run(args.dataset, args.topic_model, args.store, args.questions, args.server, args.trace_graders,
-                 args.temperature, args.clarified_graders)
+                 args.temperature, args.clarified_graders, args.output.with_suffix(".partial.jsonl"))
     with args.output.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
     print(json.dumps(report["summary"], indent=1))
