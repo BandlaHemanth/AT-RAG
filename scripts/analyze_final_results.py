@@ -127,7 +127,13 @@ def retrieval_analysis(rows, stats, questions=None, titles=None, types=None):
                      "allgold@5": {m: pct(sum(all5(r, m) for r in group) / len(group)) for m in methods},
                      "availability": {m: pct(sum(available(r, m) for r in group) / len(group)) for m in methods},
                      "gold_topics_mean": round(float(np.mean([len(r["routes"]["oracle"]) for r in group])), 3),
+                     "allgold@10": {m: pct(sum(r["outcomes"][r["chosen"][m]]["all@10"] for r in group) / len(group)) for m in methods},
+                     "mean_gold_hits@5": {m: round(float(np.mean([r["outcomes"][r["chosen"][m]]["hits@5"] for r in group])), 3)
+                                          for m in methods},
                      "tae_r_routes": dict(Counter(r["chosen"]["tae_r"] for r in group))}
+            if questions:
+                n_gold = Counter(len(questions[r["question_id"]]["gold_doc_ids"]) for r in group if r["question_id"] in questions)
+                entry["gold_paragraphs_per_question"] = {str(k): n_gold[k] for k in sorted(n_gold)}
             for ref in ("strict", "unfiltered"):
                 mine = [all5(r, "tae_r") for r in group]
                 base = [all5(r, ref) for r in group]
@@ -416,6 +422,10 @@ def main(argv=None):
         if "by_type" in result[c]:
             brief[c]["by_type_allgold@5"] = {t: dict(n=e["questions"], **{m: e["allgold@5"][m] for m in ("strict", "tae_r", "unfiltered", "oracle")})
                                              for t, e in result[c]["by_type"].items()}
+            brief[c]["by_type_gold_and_hits"] = {t: {"gold_paragraphs_per_question": e.get("gold_paragraphs_per_question"),
+                                                     "allgold@10": {m: e["allgold@10"][m] for m in ("strict", "tae_r", "unfiltered", "oracle")},
+                                                     "mean_gold_hits@5": {m: e["mean_gold_hits@5"][m] for m in ("strict", "tae_r", "unfiltered", "oracle")}}
+                                                 for t, e in result[c]["by_type"].items()}
     if "end_to_end" in result:
         brief["end_to_end"] = {s: {k: v for k, v in e.items() if k not in ("errors",)} | {"errors": e["errors"]["kinds"]}
                                for s, e in result["end_to_end"]["systems"].items()}
