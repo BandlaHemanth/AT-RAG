@@ -808,3 +808,13 @@ not, whatever the outcome.
 The stronger-retriever check on 2Wiki is optional and, if run, is retrieval-only with the same rules.
 
 Driver tested end to end on a synthetic dataset (`tests/test_run_replication.py`).
+
+### Verified latency rerun (16-17 November 2026)
+
+Same measurement at commit `baeecce` (tie-safe top-k, all six methods checked): **0 top-k mismatches against the
+reference for every method**. Mean ms per question (total / without embedding / topic / membership / route / scan):
+unfiltered 27.16 / 7.93 / - / - / - / 7.71; strict 28.59 / 9.35 / 6.28 / - / - / 2.96; TAE V1 30.66 / 11.42 / 6.28 /
+- / - / 5.00; TAE V2 69.06 / 49.83 / 6.28 / 36.07 / 1.19 / 6.11; TAE-R 35.14 / 15.90 / 6.28 / - / 1.68 / 7.73;
+TAE-R-P1 34.79 / 15.55 / 6.28 / - / 1.55 / 7.64 (embedding 19.24 for all). Within 0.5 ms of the first run, which
+confirms its timings. This verified run is the one reported. Backup: private Kaggle dataset
+`bandlahemanth/tae-r-extras-v2`, latency_H2_validation.json SHA-256 `7f6e984efe929f5c5d6e3588e32edbe2854751edc9721ec8990af55a8c1518fe`.
