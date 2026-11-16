@@ -768,3 +768,43 @@ faithful_500.partial.jsonl `83af1bb9e032fe69`, run.log `434bb9e1c364cdbc`, analy
 tables.tex `656f1af6684307c1`, cost_accuracy_H2.pdf `c1c5f994f955d322`, by_type_H2.pdf `0d726adb20ccaf61`,
 latency_H2_validation.json `09cfd4a9e55f556d`. Raw 2Wiki dev.json (not backed up; re-downloadable) SHA-256 prefix
 `21b0a6ffef454f88`.
+
+## 23. Amendment v2.0: replication on HotpotQA and MuSiQue (17 November 2026, before any of their data was used)
+
+Written before any HotpotQA or MuSiQue split, corpus, embedding or result exists. Purpose: test whether the
+section 18/20 findings generalise beyond 2WikiMultiHopQA. Nothing is selected or tuned on the new datasets.
+
+**Data.** The same processed archive (Google Drive `1t2BjJtsejSIUZI54PKObMFG6_wMMG3bC`, archive SHA-256
+`271fff07efb120a71739c89ab69ab10f4c00059e74b2f7b451a607158c364906`), re-downloaded on 16 November; its four 2Wiki
+files are byte-identical to the audited Day-0 files (section 1). HotpotQA: train 90,447, dev 7,405 questions;
+MuSiQue: train 19,938, dev 2,417; each with dev_subsampled (100) and test_subsampled (500). Backed up as the private
+Kaggle dataset `bandlahemanth/atrag-processed-hotpot-musique-v1` with SHA-256 per file.
+
+**Fixed pipeline** (`scripts/run_replication.py`; every rule below is in its code):
+1. Splits: the v1 builder, seed 20261110. exposed = dev_subsampled ∪ test_subsampled; final_eval = dev minus
+   exposed. router_train + validation = |dev| (the 2Wiki pool-scale parity), divided in the 2Wiki ratio
+   8,000 : 4,576: HotpotQA 4,711 / 2,694, MuSiQue 1,538 / 879. e2e_300 and e2e_500 nested in final_eval.
+2. Corpora: the v1 builder, title exclusion `evaluation_and_heldout`. If the topic-fitting population exceeds
+   300,579 paragraphs (the 2Wiki size), it is reduced to the first 300,579 in seeded SHA-256 order (seed 20261110),
+   for comparable topic granularity and memory.
+3. Embeddings: the v1 encoder and settings (all-MiniLM-L6-v2 @ `1110a243`, normalised, max length 256, batch 128).
+4. Topic model: the frozen H2 settings only (shared 5-D UMAP, cosine, 15 neighbours, seed 42; HDBSCAN min cluster
+   100, min samples 10). No candidate comparison and no K2 on the new datasets.
+5. TAE-R: the frozen section-14 design and training procedure (15 features, two logistic regressions, thresholds
+   by the same out-of-fold rule on router_train).
+6. Validation results are computed and reported for comparability only; no decision depends on them. The pipeline
+   continues to the final stage regardless of their values.
+7. Final: retrieval on final_eval with the saved predictor, run once per dataset; same metrics and statistics as
+   section 18 (paired bootstrap 10,000 / seed 42, exact McNemar, ±1-point equivalence margin).
+
+**End-to-end** (if time allows, HotpotQA first): the section-20 controlled pipeline unchanged (same LLM digest,
+prompts, temperature 0, seed 42, clarified graders), on e2e_300; e2e_500 only if 300 completes with time to spare.
+
+**Hypotheses, stated before the runs.** H1: strict AllGold@5 is below unfiltered (the filter loses evidence).
+H2: TAE-R is better than strict. H3: TAE-R is equivalent to unfiltered (±1 point). Each is reported as confirmed or
+not, whatever the outcome.
+
+**Dropped (future work):** TAE-R v2 with hop-aware re-probing, for lack of time before the 23 November deadline.
+The stronger-retriever check on 2Wiki is optional and, if run, is retrieval-only with the same rules.
+
+Driver tested end to end on a synthetic dataset (`tests/test_run_replication.py`).

@@ -188,7 +188,9 @@ def collect(data_dir, splits, names):
 
 
 def build(data_dir, splits_dir, output_dir, *, mode, title_exclusion, frozen_manifest_sha256,
-          expected_text_population, names=None):
+          expected_text_population, names=None, fit_cap=None, cap_seed=None):
+    """expected_text_population None skips the frozen-count check (replications, amendment v2.0).
+    fit_cap: keep at most this many topic-fitting paragraphs, the first in seeded SHA-256 order."""
     require(mode in ("measure", "build"), "mode must be measure or build")
     require(title_exclusion in TITLE_MODES, f"title_exclusion must be one of {TITLE_MODES}")
     names = dict(NAMES, **(names or {}))
@@ -206,7 +208,7 @@ def build(data_dir, splits_dir, output_dir, *, mode, title_exclusion, frozen_man
     eval_keys = set(final_pool.texts) | set(sub_pool.texts) | set(held_eval_pool.texts)
     held_keys = set(held_pool.texts)
     fit_keys = set(fit_pool.texts) - eval_keys - held_keys
-    require(len(fit_keys) == expected_text_population,
+    require(expected_text_population is None or len(fit_keys) == expected_text_population,
             f"Text-level population {len(fit_keys)} differs from the frozen {expected_text_population}")
 
     eval_titles = final_pool.all_titles() | sub_pool.all_titles() | held_eval_pool.all_titles()
@@ -226,6 +228,11 @@ def build(data_dir, splits_dir, output_dir, *, mode, title_exclusion, frozen_man
     any_norm_held = {k for k in ordered if hits(k, norm=held_titles_norm)}
     excluded = any_norm_eval if title_exclusion == "evaluation" else any_norm_eval | any_norm_held
     population = [k for k in ordered if k not in excluded]
+    population_before_cap = len(population)
+    if fit_cap is not None and len(population) > fit_cap:
+        require(cap_seed is not None, "fit_cap needs cap_seed")
+        keep = set(sorted(population, key=lambda k: hashlib.sha256(f"{cap_seed}:{k.hex()}".encode()).hexdigest())[:fit_cap])
+        population = [k for k in ordered if k in keep]
 
     counts = {
         "text_level_population": len(fit_keys),
@@ -239,7 +246,8 @@ def build(data_dir, splits_dir, output_dir, *, mode, title_exclusion, frozen_man
         },
         "title_exclusion_applied": title_exclusion,
         "texts_excluded_by_title": len(excluded),
-        "topic_fit_population_after_title_exclusion": len(population),
+        "topic_fit_population_after_title_exclusion": population_before_cap,
+        "topic_fit_cap": fit_cap, "topic_fit_population": len(population),
         "unique_titles": {"evaluation": len(eval_titles), "router_train_validation": len(held_pool.all_titles())},
         "retrieval_final_unique_texts": len(final_pool.texts),
         "retrieval_validation_unique_texts": len(held_pool.texts),
