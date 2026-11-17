@@ -475,12 +475,19 @@ def summarise(rows):
     return out
 
 
+def fit_sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--corpora-dir", type=Path, required=True)
-    parser.add_argument("--embeddings-dir", type=Path, required=True)
-    parser.add_argument("--topics-dir", type=Path, required=True, help="tae-r-topics (needs H2/assign_final for final_eval)")
-    parser.add_argument("--router-model", type=Path, required=True, help="tae_r_router_H2_v1.joblib")
+    parser.add_argument("--corpora-dir", type=Path)
+    parser.add_argument("--embeddings-dir", type=Path)
+    parser.add_argument("--topics-dir", type=Path, help="tae-r-topics (needs H2/assign_final for final_eval)")
+    parser.add_argument("--router-model", type=Path, help="tae_r_router_H2_v1.joblib")
+    parser.add_argument("--replication-work-dir", type=Path,
+                        help="a run_replication.py work directory (amendment v2.0): sets the corpora, embeddings, "
+                             "topics, final assignment, saved predictor and their frozen hashes")
     parser.add_argument("--split", choices=("validation", "final_eval"), required=True)
     parser.add_argument("--question-ids", type=Path, help="file of question ids (e.g. e2e_300_ids.txt)")
     parser.add_argument("--limit", type=int, help="first N questions (validation dry run)")
@@ -495,8 +502,26 @@ def main(argv=None):
     digest = ollama_digest(args.server, MODEL)
     if not digest.startswith(MODEL_DIGEST):
         raise SystemExit(f"served {MODEL} digest {digest} differs from the protocol")
+    frozen = None
+    if args.replication_work_dir:
+        rep = _load("run_replication", "run_replication.py")
+        work = rep.Work(args.replication_work_dir)
+        for stage in ("corpora", "embed", "topics", "validate"):
+            if not work.done(stage):
+                raise SystemExit(f"replication stage {stage} is not complete")
+        frozen = work.frozen()
+        args.corpora_dir = work.dir("corpora") / "corpora"
+        args.embeddings_dir = work.dir("embed") / "embeddings"
+        args.topics_dir = work.dir("topics") / "topics"
+        args.final_dir = work.dir("final") / "assign"
+        args.router_model = work.dir("validate") / f"tae_r_router_{rep.CANDIDATE}.joblib"
+        if fit_sha(args.router_model) != work.record("validate")["router_model_sha256"]:
+            raise SystemExit("saved predictor differs from the replication record")
+    elif not (args.corpora_dir and args.embeddings_dir and args.topics_dir and args.router_model):
+        raise SystemExit("give --replication-work-dir, or all of --corpora-dir --embeddings-dir --topics-dir --router-model")
     engine, questions = build_engine(args.corpora_dir, args.embeddings_dir, args.topics_dir, args.split,
-                                     args.router_model, allow_final=args.allow_final, final_dir=args.final_dir)
+                                     args.router_model, allow_final=args.allow_final, final_dir=args.final_dir,
+                                     frozen=frozen)
     if args.question_ids:
         order = args.question_ids.read_text(encoding="utf-8").split()
     else:
