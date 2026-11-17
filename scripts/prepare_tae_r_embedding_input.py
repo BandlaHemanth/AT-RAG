@@ -42,7 +42,9 @@ def prepare(corpora_dir, output_dir, frozen_manifest_sha256=FROZEN_CORPUS_MANIFE
         info = manifest["files"][name]
         raw = (corpora_dir / info["file"]).read_bytes()
         require(sha256_hex(raw) == info["sha256"], f"{info['file']}: hash differs from manifest")
-        lines = [line for line in raw.decode("utf-8").splitlines() if line.strip()]
+        # Records are separated by "\n" only: str.splitlines() would also split inside texts that hold
+        # U+2028, U+0085 and similar characters, which json.dumps(ensure_ascii=False) leaves unescaped.
+        lines = [line for line in raw.decode("utf-8").split("\n") if line.strip()]
         require(len(lines) == info["count"], f"{info['file']}: count differs from manifest")
         for line in lines:
             record = json.loads(line)

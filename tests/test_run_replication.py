@@ -39,7 +39,8 @@ def question(qid, i, prefix):
     contexts = []
     for j in range(8):
         cc = c if j < 4 else (c + j) % CENTERS
-        contexts.append({"title": f"{prefix} title {i} {j}", "paragraph_text": f"blob{cc} {prefix} para {i} {j}",
+        sep = "\u2028" if j == 7 else " "  # a line separator inside a text must not split records
+        contexts.append({"title": f"{prefix} title {i} {j}", "paragraph_text": f"blob{cc} {prefix} para{sep}{i} {j}",
                          "is_supporting": j in (0, 1) or (i % 2 == 1 and j == 5)})
     return {"question_id": qid, "question_text": f"blob{c} {prefix} question {i}",
             "answers_objects": [{"spans": ["x"]}], "contexts": contexts}

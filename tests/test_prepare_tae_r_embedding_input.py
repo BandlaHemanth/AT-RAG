@@ -29,7 +29,7 @@ class PrepareTests(unittest.TestCase):
         self.root = Path(tmp.name)
         self.corpora = self.root / "corpora"
         self.corpora.mkdir()
-        parts = {"topic_fit_population": ["f1", "f2"], "retrieval_final": ["a", "shared", "é"],
+        parts = {"topic_fit_population": ["f1", "f2", "line\u2028separator", "next\x85line"], "retrieval_final": ["a", "shared", "é"],
                  "retrieval_validation": ["b", "shared"]}
         files = {}
         for name, texts in parts.items():
@@ -43,11 +43,11 @@ class PrepareTests(unittest.TestCase):
 
     def test_union_is_unique_sorted_and_summarised(self):
         summary = prep.prepare(self.corpora, self.root / "out", self.frozen)
-        self.assertEqual(summary["unique_paragraphs"], 6)
+        self.assertEqual(summary["unique_paragraphs"], 8)
         self.assertEqual(summary["paragraphs_in_both_retrieval_corpora"], 1)
         raw = (self.root / "out" / "documents.jsonl").read_bytes()
         self.assertEqual(summary["documents_sha256"], hashlib.sha256(raw).hexdigest())
-        rows = [json.loads(x) for x in raw.decode().splitlines()]
+        rows = [json.loads(x) for x in raw.decode().split("\n") if x]
         self.assertEqual([r["document_id"] for r in rows], sorted(r["document_id"] for r in rows))
         for r in rows:
             self.assertEqual(r["document_id"], hashlib.sha256(r["paragraph_text"].encode()).hexdigest())

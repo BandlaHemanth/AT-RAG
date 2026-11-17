@@ -818,3 +818,19 @@ unfiltered 27.16 / 7.93 / - / - / - / 7.71; strict 28.59 / 9.35 / 6.28 / - / - /
 TAE-R-P1 34.79 / 15.55 / 6.28 / - / 1.55 / 7.64 (embedding 19.24 for all). Within 0.5 ms of the first run, which
 confirms its timings. This verified run is the one reported. Backup: private Kaggle dataset
 `bandlahemanth/tae-r-extras-v2`, latency_H2_validation.json SHA-256 `7f6e984efe929f5c5d6e3588e32edbe2854751edc9721ec8990af55a8c1518fe`.
+
+### Replication run 1 (17 November 2026, 19:08 UTC on 16 Nov): MuSiQue complete, HotpotQA stopped before embedding
+
+One committed Kaggle run (commit `3219163`) processed both datasets in turn.
+
+**HotpotQA stopped at the embedding-input step, before any embedding, topic model, router or result existed.**
+Splits (router_train 4,711, validation 2,694, final_eval 6,805) and corpora (topic-fitting population 385,190 before the
+cap, 300,579 after; validation corpus 66,378, final corpus 66,609 paragraphs) were built; then
+`prepare_tae_r_embedding_input.py` refused: "topic_fit_population.jsonl: count differs from manifest". Cause: it split
+records with `str.splitlines()`, which also breaks at U+2028, U+0085 and similar characters that `json.dumps(...,
+ensure_ascii=False)` leaves inside paragraph texts; some HotpotQA paragraphs contain them (no 2Wiki paragraph did, so
+2Wiki outputs are unaffected). Fixed to split on "\n" only; a unit test and the end-to-end replication test now include
+such a text and reproduce the refusal before the fix. Because HotpotQA produced no result of any kind, it is rerun
+from the start under the unchanged amendment-v2.0 rules.
+
+**MuSiQue completed all stages**; its results are recorded in the next subsection.
