@@ -834,3 +834,30 @@ such a text and reproduce the refusal before the fix. Because HotpotQA produced 
 from the start under the unchanged amendment-v2.0 rules.
 
 **MuSiQue completed all stages**; its results are recorded in the next subsection.
+
+### Replication results (amendment v2.0; each final set run once)
+
+**MuSiQue** (run 1, commit `3219163`; dev 2,417 → router_train 1,538, validation 879, final_eval 1,817). Embedding on
+`cuda:0`. TAE-R thresholds 0.75 / 0.75 (TAE-R-P1 0.45 / 0.45). Final AllGold@5: strict 6.16%, fixed three 6.22%,
+TAE V1 7.87%, TAE V2 8.97%, TAE-R-P1 10.02%, **TAE-R 10.29%**, unfiltered 10.29%, oracle 12.49%.
+TAE-R vs strict +4.13 pt [+3.03, +5.28], 93 / 18, p = 2.3e-13 (better). TAE-R vs unfiltered 0.00 pt [0.00, 0.00],
+0 / 0 (identical on all 1,817 questions; equivalent), although TAE-R filtered 921 of them (routes: unfiltered 896,
+S3 894, S1 27): every filtered route kept the top 5 unchanged. Strict vs unfiltered −4.13 pt, 18 / 93. Oracle vs
+unfiltered +2.20 pt, 40 / 0. Validation (879): TAE-R 11.72%, unfiltered 11.83%, strict 4.89%, oracle 15.47%.
+Backup: `bandlahemanth/tae-r-rep-musique-v1`.
+
+**HotpotQA** (run 2, commit `6967568`; dev 7,405 → router_train 4,711, validation 2,694, final_eval 6,805; fitting
+population 385,190 → capped 300,579; validation corpus 66,378, final corpus 66,609; 423,758 paragraphs embedded on
+CUDA; 45 min). TAE-R thresholds 0.80 / 0.85 (TAE-R-P1 0.45 / never). Final AllGold@5: strict 16.44%, fixed three
+18.99%, TAE V1 24.79%, TAE V2 29.76%, TAE-R-P1 34.83%, **TAE-R 34.83%**, unfiltered 35.03%, oracle 40.22%.
+TAE-R vs strict +18.38 pt [+17.38, +19.41], 1,339 / 88, p = 7.8e-288 (better). TAE-R vs unfiltered −0.21 pt
+[−0.34, −0.09], 3 / 17, p = 0.0026 (equivalent within ±1 pt). Strict vs unfiltered −18.59 pt, 90 / 1,355. Oracle vs
+unfiltered +5.19 pt, 353 / 0. Validation (2,694): TAE-R 34.78%, unfiltered 34.97%, strict 16.63%, oracle 40.87%.
+Backup: `bandlahemanth/tae-r-rep-hotpotqa-v1`.
+
+**Pre-stated hypotheses:** H1 (strict below unfiltered), H2 (TAE-R better than strict) and H3 (TAE-R equivalent to
+unfiltered within ±1 pt) are confirmed on both datasets, as on 2WikiMultiHopQA.
+
+Note on the run-1 log: an interactive execution of the same cell in the notebook editor (18:57 UTC, 16 Nov) stopped at
+the same HotpotQA error and was cancelled about two minutes into MuSiQue, before any MuSiQue result; only the committed
+run reached results.
