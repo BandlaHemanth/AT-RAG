@@ -861,3 +861,22 @@ unfiltered within ±1 pt) are confirmed on both datasets, as on 2WikiMultiHopQA.
 Note on the run-1 log: an interactive execution of the same cell in the notebook editor (18:57 UTC, 16 Nov) stopped at
 the same HotpotQA error and was cancelled about two minutes into MuSiQue, before any MuSiQue result; only the committed
 run reached results.
+
+### HotpotQA end-to-end (e2e_300, run once; 18-19 November 2026)
+
+Section-20 controlled pipeline unchanged (commit `acbafad`, `--replication-work-dir` on the `tae-r-rep-hotpotqa-v1`
+backup; qwen2.5:7b-instruct-q8_0 digest `2d9500c948416525`, temperature 0, seed 42, clarified graders, k = 5, at most
+5 iterations, 4 workers). 900 runs, all completed (5,143 s).
+
+| System | EM | F1 | Errors | First-retrieval AllGold@5 | Mean iterations | LLM calls | Similarity comp. |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Original (strict) | 29.3% | 38.6% | 8 | 19.0% | 4.77 | 10.99 | 25,241 |
+| No filter | 35.7% | 46.1% | 7 | 38.3% | 4.74 | 11.02 | 99,247 |
+| TAE-R | 35.0% | 45.1% | 5 | 38.0% | 4.80 | 11.08 | 96,763 |
+
+Paired (10,000 bootstrap resamples, seed 42; exact McNemar): TAE-R vs original EM +5.67 pt [+0.67, +10.67], 39 / 22,
+p = 0.040 (significant); F1 +6.53 [+1.59, +11.47]; first-retrieval AllGold@5 +19.0 pt [+14.0, +24.3], 66 / 9.
+No filter vs original EM +6.33 [+1.33, +11.33], 40 / 21, p = 0.020. TAE-R vs no filter EM −0.67 [−3.67, +2.33],
+10 / 12, p = 0.83 (not significant); first retrieval −0.33 [−1.0, 0.0], 0 / 1. The answer-level gain over the original
+replicates on HotpotQA, smaller than on 2Wiki (+12.2) and with a wider interval (300 questions). Backup:
+`bandlahemanth/tae-r-rep-hotpotqa-e2e-v1`.
