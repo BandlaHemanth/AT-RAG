@@ -31,6 +31,15 @@ ROWS = [
 ]
 
 
+class TypeInferenceTests(unittest.TestCase):
+    def test_hotpotqa_field_and_musique_hops(self):
+        qs = {"5a8b": {"type": "bridge"}, "5a8c": {"type": "comparison"},
+              "2hop__1_2": {}, "3hop1__1_2_3": {}, "4hop2__1": {}, "plain": {}}
+        self.assertEqual(ana.types_from_questions(qs), {"5a8b": "bridge", "5a8c": "comparison", "2hop__1_2": "2-hop",
+                                                        "3hop1__1_2_3": "3-hop", "4hop2__1": "4-hop"})
+        self.assertIsNone(ana.types_from_questions({"x": {}}))
+
+
 class RetrievalAnalysisTests(unittest.TestCase):
     def setUp(self):
         self.stats = ana._load("tae_r_router", "tae_r_router.py")

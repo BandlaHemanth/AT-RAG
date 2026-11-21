@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -29,7 +30,8 @@ LABELS = {"strict": "Strict (original AT-RAG)", "fixed_three": "Fixed three", "t
 ORDER = ("strict", "fixed_three", "tae_v1", "tae_v2", "tae_r", "tae_r_p1", "unfiltered", "oracle")
 SYSTEM_LABELS = {"original": "Original AT-RAG (strict)", "nofilter": "AT-RAG without filter", "tae_r": "AT-RAG with TAE-R"}
 TYPE_LABELS = {"comparison": "Comparison", "inference": "Inference", "compositional": "Compositional",
-               "bridge_comparison": "Bridge comparison"}
+               "bridge_comparison": "Bridge comparison", "bridge": "Bridge", "2-hop": "2-hop", "3-hop": "3-hop",
+               "4-hop": "4-hop"}
 N_EXAMPLES = 5
 
 
@@ -354,6 +356,23 @@ def figures(report, analysis, cand, out_dir):
 
 # ------------------------------------------------------------------------------ inputs and main
 
+HOPS = re.compile(r"^(\d)hop")
+
+
+def types_from_questions(questions):
+    """Question types without a raw file: the processed record's own `type` (HotpotQA: bridge / comparison),
+    else MuSiQue's hop count from its ID prefix ("2hop__...", "3hop1__...", "4hop2__..."). None if neither."""
+    types = {}
+    for qid, record in questions.items():
+        if record.get("type"):
+            types[qid] = str(record["type"])
+        else:
+            m = HOPS.match(str(qid))
+            if m:
+                types[qid] = f"{m.group(1)}-hop"
+    return types or None
+
+
 def load_types(raw_dev):
     data = json.loads(Path(raw_dev).read_text(encoding="utf-8"))
     return {r["_id"]: r["type"] for r in data}
@@ -376,6 +395,8 @@ def run(final_dir, candidates, e2e_records, corpora_dir, raw_dev, out_dir, log=p
     questions = None
     if corpora_dir:
         questions = {r["question_id"]: r for r in read_jsonl(Path(corpora_dir) / "questions_final_eval.jsonl")}
+        if types is None:
+            types = types_from_questions(questions)
     titles = None
     if corpora_dir and questions:
         wanted = {d for q in questions.values() for d in q.get("gold_doc_ids", [])}
