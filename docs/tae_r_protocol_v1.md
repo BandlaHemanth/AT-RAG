@@ -966,3 +966,31 @@ types (2Wiki bridge comparison / compositional, MuSiQue 3- and 4-hop). Negative 
 
 **End-to-end** with TAE-R-H only if H4 holds on at least two datasets and time allows (same controlled pipeline,
 e2e_300); otherwise retrieval only.
+
+## 25. Amendment v4.0: a stronger retrieval backbone for every method (declared 23 November 2026, before implementation)
+
+**Motivation.** Absolute scores are limited by the small MiniLM retriever. Modern RAG systems use a stronger dense
+encoder and a cross-encoder reranker. The question is whether TAE-R's advantage over the original filter persists
+with such a backbone, and how far absolute scores rise. The backbone is applied identically to every method.
+
+**What stays frozen.** Topic models, topic labels of every paragraph and question, and every routing decision (strict,
+TAE-R, TAE-R-P1, oracle) are taken unchanged from the frozen per-question outputs of sections 18 and 23. Only the
+ranking inside each method's allowed set changes.
+
+**Backbone.** Passage text = its title(s) and paragraph ("title. text"; multiple titles joined by " / "). For each
+question and method: dense scores of the question against every allowed paragraph (exact search), the top R by dense
+score, then optionally reranked by a cross-encoder on (question, passage); the top 5 are reported. Encoder query and
+passage prefixes as their model cards prescribe. All model revisions are recorded at run time.
+
+**Selection on the 2WikiMultiHopQA validation fold only** (4,576 questions, 56,655 paragraphs), using **unfiltered
+search** as the method-neutral objective (AllGold@5; ties by Recall@5, then lower cost):
+- dense encoder ∈ {`BAAI/bge-base-en-v1.5`, `intfloat/e5-base-v2`};
+- reranker ∈ {none, `cross-encoder/ms-marco-MiniLM-L-12-v2`, `BAAI/bge-reranker-base`};
+- rerank depth R ∈ {20, 50} (when a reranker is used).
+The chosen backbone is frozen in `backbone_selection.json` and applied unchanged to all three datasets.
+
+**Final evaluation, once per dataset:** strict, unfiltered, TAE-R, TAE-R-P1 and oracle with the frozen backbone (dense
+only and dense + reranker both reported); same statistics as section 18. **Hypotheses:** H7: with the strong backbone
+TAE-R is better than strict on all three datasets; H8: TAE-R is equivalent to unfiltered (±1 point); H9: absolute
+AllGold@5 rises for every method. **End-to-end** with the backbone on the existing e2e_500 (2Wiki) / e2e_300 sets
+for original, no filter and TAE-R if time allows, unchanged otherwise.
