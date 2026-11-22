@@ -929,3 +929,40 @@ still retrieves more gold paragraphs than strict at every hop count.
 23.1%; 53.9% (115) vs 24.3%; 53.5% (114) vs 23.7%. MuSiQue 26.7% (15) vs 6.3%; 32.0% (25) vs 7.3%; 32.0% (25) vs 6.2%.
 EM by type (original / no filter / TAE-R): HotpotQA bridge (230) 24.8 / 33.9 / 32.6, comparison (70) 44.3 / 41.4 /
 42.9; MuSiQue 2-hop (148) 8.8 / 11.5 / 9.5, 3-hop (100) 7.0 / 10.0 / 10.0, 4-hop (52) 3.8 / 1.9 / 1.9.
+
+## 24. Amendment v3.0: hop-aware TAE-R (TAE-R-H), declared 22 November 2026 before any implementation or result
+
+**Motivation (from sections 21-23).** On every dataset the remaining failures are second-hop paragraphs that the
+question does not name: AllGold@5 is 0% for 2Wiki bridge comparison and MuSiQue 4-hop, and falls from 18.5% (2-hop)
+to 2.1% (3-hop) on MuSiQue, while gold hits@5 stay well above zero. A single dense query cannot reach them.
+
+**Method (fixed now).** For a question q (unit embedding e_q):
+1. Hop 1 is TAE-R v1 unchanged: route S1 / S3 / unfiltered with the saved predictor; ranked list R1.
+2. Keep the top `a` paragraphs of R1.
+3. For each of the top `B` paragraphs p of R1, a second-hop query e2 = normalise(e_q + λ·e_p) (vector composition of
+   the question with what was found; no re-encoding).
+4. Hop-2 search with e2 over the corpus, excluding the kept paragraphs. Two arms:
+   - **TAE-R-H (topics):** e2 is routed by the same TAE-R procedure and saved predictor (Probe-1 and Probe-2 features
+     computed from e2; the HDBSCAN label features are the question's), and ranked within the routed topics;
+   - **Hop-2 without topics (ablation):** e2 searches the whole corpus.
+5. Final top 5 = the `a` kept paragraphs, then the best (5 − a) hop-2 candidates by their best hop-2 score over the
+   B queries (ties by paragraph index); if fewer, filled from R1.
+
+Cost counts every similarity computed (hop-1 scan and centroids, plus per hop-2 query one scan, plus centroids for the
+topic arm).
+
+**Configuration grid (8 per arm):** λ ∈ {0.5, 1.0}, B ∈ {1, 2}, a ∈ {2, 3}; selected **on the
+2WikiMultiHopQA validation fold only** (4,576 questions), separately for each arm, by AllGold@5, ties by Recall@5,
+then fewer similarity computations, then smaller λ, B, a. The chosen configuration of each arm is frozen in
+`selection.json` and applied unchanged to all three datasets; no HotpotQA or MuSiQue data is used for selection.
+
+**Final evaluation:** each arm's frozen configuration once on each final set (2Wiki 11,976; HotpotQA 6,805; MuSiQue
+1,817), with strict, unfiltered and TAE-R v1 from the same scans; AllGold@5 and Recall@5; paired bootstrap 95% CI
+(10,000 resamples, seed 42) and exact McNemar; ±1-point equivalence margin; results by question type.
+
+**Hypotheses, stated now.** H4: TAE-R-H is better than unfiltered single-hop search (CI above 0). H5: TAE-R-H versus
+hop 2 without topics: better, equivalent or worse, reported whichever it is. H6: the gain is largest on multi-hop
+types (2Wiki bridge comparison / compositional, MuSiQue 3- and 4-hop). Negative outcomes are reported as such.
+
+**End-to-end** with TAE-R-H only if H4 holds on at least two datasets and time allows (same controlled pipeline,
+e2e_300); otherwise retrieval only.
