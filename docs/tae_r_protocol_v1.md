@@ -899,3 +899,33 @@ first-retrieval AllGold@5 +3.3 pt [+0.7, +6.3], 14 / 4, p = 0.031 (significant).
 On MuSiQue the retrieval gain is significant but does not translate into a significant answer-level gain: every
 system is near the floor (EM 7-9%, complete first evidence for 5-8% of questions), and 300 questions cannot resolve
 a difference of this size. Reported as such. Backup: `bandlahemanth/tae-r-rep-musique-e2e-v1`.
+
+### Descriptive analysis of the replications (22 November 2026)
+
+`scripts/analyze_final_results.py` at commit `8017393` on the frozen outputs (no new retrieval or LLM call). Types:
+HotpotQA's own `type` field (bridge / comparison); MuSiQue's hop count from its question-ID prefix.
+Backup: `bandlahemanth/tae-r-rep-analysis-v1`.
+
+**Gold availability** (all gold paragraphs inside the searched set): HotpotQA strict 36.22%, fixed three 43.42%,
+TAE V1 65.22%, TAE V2 81.44%, TAE-R 94.67%, TAE-R-P1 99.34%; MuSiQue strict 30.21%, fixed three 34.89%, TAE V1 65.82%,
+TAE V2 81.40%, TAE-R 92.85%, TAE-R-P1 95.76% (unfiltered and oracle 100%). As on 2Wiki (31.50%), the strict filter
+removes needed evidence for about two-thirds of questions before ranking.
+
+**TAE-R routes.** HotpotQA: S1 79 (1.16%, adequate 87.34%), S3 4,339 (63.76%, adequate 91.86%), unfiltered 2,387
+(35.08%; S3 adequate for 72.98% of them). MuSiQue: S1 27 (adequate 77.78%), S3 894 (adequate 86.13%), unfiltered 896
+(S3 adequate for 59.82%). TAE-R filters far more on HotpotQA (65%) and MuSiQue (51%) than on 2Wiki (30%).
+
+**Oracle gap.** HotpotQA 353 questions (5.19%), TAE-R solves 3 (routes: unfiltered 184, S3 169). MuSiQue 40 (2.20%),
+TAE-R solves 0.
+
+**By type (AllGold@5 strict / TAE-R / unfiltered / oracle).** HotpotQA bridge (5,421): 13.43 / 29.28 / 29.44 / 34.46;
+comparison (1,384): 28.25 / 56.58 / 56.94 / 62.79. MuSiQue 2-hop (946): 10.78 / 18.50 / 18.50 / 21.88; 3-hop (576):
+1.74 / 2.08 / 2.08 / 3.30; 4-hop (295): 0.00 / 0.00 / 0.00 / 0.34. Mean gold hits@5 (strict / TAE-R): HotpotQA
+bridge 0.750 / 1.183, comparison 0.980 / 1.490; MuSiQue 2-hop 0.67 / 1.01, 3-hop 0.819 / 1.184, 4-hop 0.583 / 0.936.
+Complete evidence with a single dense query collapses as the number of hops grows, for every method, while TAE-R
+still retrieves more gold paragraphs than strict at every hop count.
+
+**End-to-end, EM given complete first evidence vs not** (original / no filter / TAE-R): HotpotQA 56.1% (n = 57) vs
+23.1%; 53.9% (115) vs 24.3%; 53.5% (114) vs 23.7%. MuSiQue 26.7% (15) vs 6.3%; 32.0% (25) vs 7.3%; 32.0% (25) vs 6.2%.
+EM by type (original / no filter / TAE-R): HotpotQA bridge (230) 24.8 / 33.9 / 32.6, comparison (70) 44.3 / 41.4 /
+42.9; MuSiQue 2-hop (148) 8.8 / 11.5 / 9.5, 3-hop (100) 7.0 / 10.0 / 10.0, 4-hop (52) 3.8 / 1.9 / 1.9.
