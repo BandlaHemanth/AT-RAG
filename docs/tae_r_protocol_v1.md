@@ -880,3 +880,22 @@ No filter vs original EM +6.33 [+1.33, +11.33], 40 / 21, p = 0.020. TAE-R vs no 
 10 / 12, p = 0.83 (not significant); first retrieval −0.33 [−1.0, 0.0], 0 / 1. The answer-level gain over the original
 replicates on HotpotQA, smaller than on 2Wiki (+12.2) and with a wider interval (300 questions). Backup:
 `bandlahemanth/tae-r-rep-hotpotqa-e2e-v1`.
+
+### MuSiQue end-to-end (e2e_300, run once; 21-22 November 2026)
+
+Same pipeline and settings as the HotpotQA end-to-end run (commit `acbafad`, on the `tae-r-rep-musique-v1` backup).
+Version 4 of the notebook was cancelled by the user before it produced any output; Version 5 is the only run.
+900 runs, all completed (5,811 s).
+
+| System | EM | F1 | Errors | First-retrieval AllGold@5 | Mean iterations | LLM calls | Similarity comp. |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Original (strict) | 7.3% | 15.5% | 4 | 5.0% | 4.89 | 11.22 | 8,334 |
+| No filter | 9.3% | 17.2% | 6 | 8.3% | 4.81 | 11.11 | 30,665 |
+| TAE-R | 8.3% | 17.7% | 5 | 8.3% | 4.83 | 11.11 | 30,146 |
+
+Paired: TAE-R vs original EM +1.0 pt [−2.3, +4.3], 15 / 12, p = 0.70 (**not significant**); F1 +2.2 [−1.5, +6.0];
+first-retrieval AllGold@5 +3.3 pt [+0.7, +6.3], 14 / 4, p = 0.031 (significant). No filter vs original EM +2.0
+[−1.7, +5.7], p = 0.36. TAE-R vs no filter EM −1.0 [−2.7, +0.3], p = 0.38; identical first retrieval on all 300.
+On MuSiQue the retrieval gain is significant but does not translate into a significant answer-level gain: every
+system is near the floor (EM 7-9%, complete first evidence for 5-8% of questions), and 300 questions cannot resolve
+a difference of this size. Reported as such. Backup: `bandlahemanth/tae-r-rep-musique-e2e-v1`.
