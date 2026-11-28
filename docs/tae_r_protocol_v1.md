@@ -1009,7 +1009,7 @@ path not found); v2 is the only run that computed anything. Output archive `back
 | e5-base-v2 | 35.53 / 64.50 | 36.76 / 65.77 | 36.63 / 66.07 | **38.29** / 66.50 | 38.18 / 66.88 |
 
 Chosen and frozen: **e5-base-v2 + bge-reranker-base, R = 20** (revisions recorded in `backbone_selection.json`).
-For reference, unfiltered MiniLM on the same fold was 16.9% (section 16), so the backbone more than doubles it.
+For reference, unfiltered MiniLM on the same fold was 16.28% (validation results above), so the backbone more than doubles it.
 
 **Final AllGold@5 (%), frozen routes, chosen backbone (dense only / dense + reranker):**
 
