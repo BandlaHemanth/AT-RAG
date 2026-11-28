@@ -994,3 +994,53 @@ only and dense + reranker both reported); same statistics as section 18. **Hypot
 TAE-R is better than strict on all three datasets; H8: TAE-R is equivalent to unfiltered (±1 point); H9: absolute
 AllGold@5 rises for every method. **End-to-end** with the backbone on the existing e2e_500 (2Wiki) / e2e_300 sets
 for original, no filter and TAE-R if time allows, unchanged otherwise.
+
+### Backbone results (run once; Kaggle notebook `TAE-R-backbone`, version "backbone v2", 27-28 November 2026)
+
+Code at commit `4a072e1`; GPU T4 x2; 35,319 s. Version "backbone v1" stopped before any computation (dataset mount
+path not found); v2 is the only run that computed anything. Output archive `backbone_results.tgz`, SHA-256
+`90b72a12bd2a6916de8a47d7c0ede684584caa55cf13d2abd69c1f14664d83d2`.
+
+**Selection (2Wiki validation, 4,576 questions, unfiltered search), AllGold@5 / Recall@5:**
+
+| Encoder | none | MiniLM-L12 R=20 | MiniLM-L12 R=50 | bge-reranker R=20 | bge-reranker R=50 |
+|---|---:|---:|---:|---:|---:|
+| bge-base-en-v1.5 | 35.77 / 64.61 | 36.08 / 65.66 | 36.25 / 66.05 | 37.94 / 66.58 | 37.94 / 66.96 |
+| e5-base-v2 | 35.53 / 64.50 | 36.76 / 65.77 | 36.63 / 66.07 | **38.29** / 66.50 | 38.18 / 66.88 |
+
+Chosen and frozen: **e5-base-v2 + bge-reranker-base, R = 20** (revisions recorded in `backbone_selection.json`).
+For reference, unfiltered MiniLM on the same fold was 16.9% (section 16), so the backbone more than doubles it.
+
+**Final AllGold@5 (%), frozen routes, chosen backbone (dense only / dense + reranker):**
+
+| Dataset | Strict (original) | TAE-R | TAE-R-P1 | Unfiltered | Oracle | MiniLM TAE-R (section 18/23) |
+|---|---:|---:|---:|---:|---:|---:|
+| 2Wiki (11,976) | 13.25 / 13.86 | 35.13 / **37.05** | 35.09 / 37.17 | 36.02 / 38.16 | 38.40 / 40.41 | 16.52 |
+| HotpotQA (6,805) | 24.92 / 28.95 | 59.87 / **71.39** | 60.98 / 73.12 | 61.38 / 73.62 | 65.76 / 77.65 | 34.83 |
+| MuSiQue (1,817) | 8.15 / 9.52 | 13.76 / **18.44** | 13.59 / 17.78 | 13.87 / 18.60 | 17.61 / 23.00 | 10.29 |
+
+Recall@5 (reranked): 2Wiki strict 38.35, TAE-R 65.71, unfiltered 66.35; HotpotQA 50.71 / 84.99 / 86.27; MuSiQue
+31.10 / 49.48 / 50.04.
+
+**Paired comparisons, reranked backbone** (bootstrap 95% CI, 10,000 resamples, seed 42; exact McNemar):
+
+| Dataset | TAE-R vs strict | helps / hurts | TAE-R vs unfiltered | helps / hurts | p | ±1 pt decision |
+|---|---|---|---|---|---:|---|
+| 2Wiki | +23.19 [+22.39, +23.96] | 2,853 / 76 | −1.11 [−1.34, −0.88] | 34 / 167 | 2.8e-22 | not equivalent |
+| HotpotQA | +42.44 [+41.26, +43.66] | 2,953 / 65 | −2.23 [−2.67, −1.81] | 36 / 188 | 5.1e-26 | not equivalent |
+| MuSiQue | +8.92 [+7.48, +10.40] | 179 / 17 | −0.17 [−0.77, +0.44] | 14 / 17 | 0.72 | equivalent |
+
+Dense only: TAE-R vs strict +21.88 / +34.94 / +5.61 (all p < 1e-19); TAE-R vs unfiltered −0.89 [−1.11, −0.68] /
+−1.51 [−1.87, −1.18] / −0.11 [−0.50, +0.28]. TAE-R-P1 vs unfiltered (reranked): −0.99 [−1.19, −0.82] / −0.50
+[−0.68, −0.34] (equivalent) / −0.83 [−1.27, −0.44]. Oracle vs unfiltered (reranked): +2.25 / +4.03 / +4.40 (all
+significant).
+
+By type (reranked, AllGold@5): HotpotQA bridge strict 25.8, TAE-R 64.6, unfiltered 67.0; comparison 41.2 / 97.9 /
+99.6. MuSiQue 2-hop 17.1 / 32.1 / 32.6; 3-hop 1.7 / 5.2 / 5.0; 4-hop near 0 for all.
+
+**Hypotheses.** H7 (TAE-R better than strict on all three datasets): **confirmed**, with gains two to three times
+larger than with MiniLM. H9 (absolute AllGold@5 rises for every method): **confirmed** on all datasets and methods.
+H8 (TAE-R equivalent to unfiltered within ±1 point): **confirmed on MuSiQue only; not confirmed on 2Wiki (−1.11)
+and HotpotQA (−2.23)**. With a stronger ranker, the paragraphs that TAE-R's routed topics exclude are found more
+often by unfiltered search, so the residual cost of routing becomes visible (2Wiki 34 helps / 167 hurts). TAE-R-P1
+remains within the margin on HotpotQA. Reported as is; no setting was changed after the final results.
