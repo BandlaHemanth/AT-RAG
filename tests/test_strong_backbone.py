@@ -114,6 +114,22 @@ class BackboneTests(unittest.TestCase):
             self.assertIn("tae_r_vs_strict|rerank", report["comparisons"])
             self.assertEqual(set(report["by_type"]), {"2-hop", "3-hop", "4-hop"})
 
+    def test_backbone_ranker_respects_allowed_set_and_reranks(self):
+        passages = [f"ent{i} w{i % 7} w{(i * 3) % 7}" for i in range(30)]
+        selection = {"protocol": sb.PROTOCOL, "encoder": "intfloat/e5-base-v2", "reranker": "BAAI/bge-reranker-base",
+                     "depth": 20, "key": "k"}
+        bb = sb.Backbone(self.models(), selection, passages)
+        allowed = np.array([3, 7, 11, 15, 19, 23, 27])
+        top = bb.top("about ent11 and ent23", allowed)
+        self.assertEqual(len(top), 5)
+        self.assertTrue(set(top.tolist()) <= set(allowed.tolist()))
+        self.assertEqual(sorted(top[:2].tolist()), [11, 23])
+        self.assertEqual(len(bb.top("anything", np.array([], dtype=np.int64))), 0)
+        dense = sb.Backbone(self.models(), dict(selection, reranker="none"), passages)
+        self.assertEqual(len(dense.top("ent4", None)), 5)
+        with self.assertRaises(ValueError):
+            sb.Backbone(self.models(), dict(selection, protocol="other"), passages)
+
     def test_rerank_cache_scores_each_pair_once(self):
         calls = []
 

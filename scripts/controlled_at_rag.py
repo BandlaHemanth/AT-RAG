@@ -346,7 +346,8 @@ class Engine:
     """Exact MiniLM search over one corpus with the three routing mechanisms."""
 
     def __init__(self, texts, doc_ids, doc_vectors, doc_labels, centroid_ids, centroids, router_model,
-                 known_questions, embed_fn, topic_fn, router_module):
+                 known_questions, embed_fn, topic_fn, router_module, ranker=None):
+        self.ranker = ranker  # amendment v4.0: ranks inside the routed set; routing itself is unchanged
         self.texts, self.doc_ids, self.docs, self.labels = texts, doc_ids, doc_vectors, doc_labels
         self.centroid_ids, self.centroids, self.model = centroid_ids, centroids, router_model
         self.known = dict(known_questions)  # text -> (vector, label, strength)
@@ -381,7 +382,10 @@ class Engine:
             cost = len(self.labels) + len(self.centroid_ids)  # probe scan reused for the ranking
         else:
             raise ValueError(system)
-        if allowed is None:
+        if self.ranker is not None:
+            allowed_idx = None if allowed is None else np.flatnonzero(np.isin(self.labels, sorted(set(allowed))))
+            top = np.asarray(self.ranker(text, allowed_idx), dtype=np.int64)
+        elif allowed is None:
             top = order[:K]
         else:
             top = order[np.isin(self.labels[order], sorted(set(allowed)))][:K]
@@ -391,7 +395,7 @@ class Engine:
 
 
 def build_engine(corpora_dir, embeddings_dir, topics_dir, split, router_path, *, allow_final=False,
-                 device="cuda", frozen=None, final_dir=None):
+                 device="cuda", frozen=None, final_dir=None, ranker_factory=None):
     fit = _load("fit_tae_r_topic_models", "fit_tae_r_topic_models.py")
     router = _load("tae_r_router", "tae_r_router.py")
     import joblib
@@ -452,8 +456,9 @@ def build_engine(corpora_dir, embeddings_dir, topics_dir, split, router_path, *,
         return labels[0], strengths[0]
 
     router_model = joblib.load(router_path)["variants"]["tae_r"]
+    ranker = ranker_factory(records, split) if ranker_factory else None
     engine = Engine(texts, doc_ids, fit.rows_for(inputs, doc_ids), doc_labels, centroid_ids, centroids,
-                    router_model, known, embed_fn, topic_fn, router)
+                    router_model, known, embed_fn, topic_fn, router, ranker=ranker)
     return engine, questions
 
 
@@ -496,6 +501,9 @@ def main(argv=None):
     parser.add_argument("--final-dir", type=Path, help="directory holding H2/assign_final (final_eval)")
     parser.add_argument("--server", default="http://127.0.0.1:11434/v1")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--backbone-selection", type=Path,
+                        help="amendment v4.0: backbone_selection.json; rank inside every route with the frozen backbone")
+    parser.add_argument("--backbone-cache", type=Path, help="cache directory for the backbone passage embeddings")
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -519,9 +527,20 @@ def main(argv=None):
             raise SystemExit("saved predictor differs from the replication record")
     elif not (args.corpora_dir and args.embeddings_dir and args.topics_dir and args.router_model):
         raise SystemExit("give --replication-work-dir, or all of --corpora-dir --embeddings-dir --topics-dir --router-model")
+    ranker_factory, backbone = None, None
+    if args.backbone_selection:
+        sb = _load("strong_backbone", "strong_backbone.py")
+        selection = json.loads(args.backbone_selection.read_text(encoding="utf-8"))
+        backbone = {"key": selection["key"], "selection_sha256": sb.sha256_file(args.backbone_selection)}
+
+        def ranker_factory(records, split):
+            models = sb.Models("cuda", cache_dir=args.backbone_cache)
+            bb = sb.Backbone(models, selection, [sb.passage(r) for r in records], tag=f"e2e_{split}_{len(records)}")
+            backbone["revisions"] = models.revisions
+            return bb.top
     engine, questions = build_engine(args.corpora_dir, args.embeddings_dir, args.topics_dir, args.split,
                                      args.router_model, allow_final=args.allow_final, final_dir=args.final_dir,
-                                     frozen=frozen)
+                                     frozen=frozen, ranker_factory=ranker_factory)
     if args.question_ids:
         order = args.question_ids.read_text(encoding="utf-8").split()
     else:
@@ -560,7 +579,8 @@ def main(argv=None):
             if i % 10 == 0 or i == len(tasks):
                 print(f"{i}/{len(tasks)} runs, {time.time() - started:.0f} s", flush=True)
     rows = [json.loads(line) for line in out_path.open(encoding="utf-8")]
-    summary = {"protocol": "tae-r-protocol-v1.3", "split": args.split, "model": MODEL, "digest": digest,
+    summary = {"protocol": "tae-r-protocol-v4.0-backbone" if backbone else "tae-r-protocol-v1.3", "backbone": backbone,
+               "split": args.split, "model": MODEL, "digest": digest,
                "temperature": TEMPERATURE, "seed": SEED, "max_iter": MAX_ITER, "k": K,
                "questions": len(order), "systems": summarise(rows),
                "records_sha256": hashlib.sha256(out_path.read_bytes()).hexdigest()}

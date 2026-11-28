@@ -166,6 +166,33 @@ class RerankCache:
         return sorted((int(d) for d in docs), key=lambda d: (-self.scores[(qi, d)], d))
 
 
+class Backbone:
+    """The frozen backbone as an online ranker for the end-to-end pipeline (amendment v4.0).
+
+    top(text, allowed_idx) ranks the allowed paragraphs (None = whole corpus) for any query text, including
+    rewritten questions: dense top R by the selected encoder, then the selected cross-encoder, top k."""
+
+    def __init__(self, models, selection, passages, tag="corpus", k=K):
+        import threading
+        require(selection["protocol"] == PROTOCOL, "selection from another protocol")
+        self.models, self.passages, self.k = models, passages, k
+        self.enc, self.rr, self.depth = selection["encoder"], selection["reranker"], selection["depth"] or 50
+        self.key = selection["key"]
+        self.vectors = models.embed(self.enc, passages, "passage", tag=tag)
+        self.lock = threading.Lock()
+
+    def top(self, text, allowed_idx):
+        with self.lock:
+            q = self.models.encoder(self.enc).encode([ENCODERS[self.enc]["query"] + text], normalize_embeddings=True,
+                                                     convert_to_numpy=True, show_progress_bar=False)[0]
+            cand = dense_top(self.vectors @ np.asarray(q, dtype=np.float32), allowed_idx, self.depth)
+            if self.rr == "none" or len(cand) == 0:
+                return np.asarray(cand[:self.k], dtype=np.int64)
+            scores = self.models.rerank(self.rr, [(text, self.passages[int(d)]) for d in cand])
+        order = sorted(range(len(cand)), key=lambda i: (-float(scores[i]), int(cand[i])))
+        return np.asarray([int(cand[i]) for i in order[:self.k]], dtype=np.int64)
+
+
 def outcome(top, gold):
     hits = int(np.isin(gold, np.asarray(top[:K], dtype=np.int64)).sum())
     return {"hits@5": hits, "all@5": int(hits == len(gold))}

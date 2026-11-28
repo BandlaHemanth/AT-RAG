@@ -186,6 +186,38 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(set(labels[top].tolist())), 1)
         self.assertEqual(info["similarity_computations"], 44)
 
+    def test_ranker_ranks_inside_the_same_routes(self):
+        router = load("router_for_ctl2", ROOT / "scripts" / "tae_r_router.py")
+        rng = np.random.RandomState(0)
+        docs = rng.normal(size=(40, 8)).astype(np.float32)
+        docs /= np.linalg.norm(docs, axis=1, keepdims=True)
+        labels = np.array([-1, 0, 1, 2] * 10)
+        centroid_ids = np.array([-1, 0, 1, 2])
+        centroids = np.stack([docs[labels == t].mean(0) for t in centroid_ids])
+        centroids /= np.linalg.norm(centroids, axis=1, keepdims=True)
+        model = {"features": list(router.FULL_FEATURES), "single": "S1", "multi": "S3",
+                 "model_single": 1.0, "model_multi": 0.0, "t1": 0.5, "t3": 0.5}
+        seen = []
+
+        def ranker(text, allowed_idx):  # reverse index order: clearly different from the dense ranking
+            seen.append(None if allowed_idx is None else allowed_idx.tolist())
+            cand = np.arange(40) if allowed_idx is None else allowed_idx
+            return sorted(cand.tolist(), reverse=True)[:5]
+        args = ([f"t{i}" for i in range(40)], [f"d{i}" for i in range(40)], docs, labels, centroid_ids, centroids,
+                model, {"Q": (docs[5], 1, 0.9)}, None, None, router)
+        plain, ranked = ctl.Engine(*args), ctl.Engine(*args, ranker=ranker)
+        top, info = ranked.retrieve("original", "Q")
+        self.assertEqual(seen[-1], np.flatnonzero(labels == 1).tolist())
+        self.assertEqual(top.tolist(), [38, 34, 30, 26, 22])
+        self.assertEqual(info["doc_ids"], ["d38", "d34", "d30", "d26", "d22"])
+        top, _ = ranked.retrieve("nofilter", "Q")
+        self.assertIsNone(seen[-1])
+        self.assertEqual(top.tolist(), [39, 38, 37, 36, 35])
+        for system in ctl.SYSTEMS:  # routing information and costs do not depend on the ranker
+            a, b = plain.retrieve(system, "Q")[1], ranked.retrieve(system, "Q")[1]
+            for key in ("route", "topics", "similarity_computations", "question_label"):
+                self.assertEqual(a.get(key), b.get(key), msg=(system, key))
+
 
 if __name__ == "__main__":
     unittest.main()
